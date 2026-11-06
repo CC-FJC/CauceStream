@@ -8,17 +8,8 @@ import 'package:video_player_platform_interface/video_player_platform_interface.
 
 import 'package:cauce_stream/main.dart';
 import 'package:cauce_stream/models/playback_message.dart';
-import 'package:cauce_stream/models/video_item.dart';
 import 'package:cauce_stream/screens/auto_playback_screen.dart';
-import 'package:cauce_stream/services/google_drive_service.dart';
 import 'package:cauce_stream/services/playback_socket_service.dart';
-
-/// Falso servicio Drive sin red: la pantalla arranca en modo screensaver
-/// y se queda esperando (retryOnError: false) sin tocar la red.
-class _FakeDriveService extends GoogleDriveService {
-  @override
-  Future<List<VideoItem>> listMediaInFolder(String folderId) async => [];
-}
 
 /// Plataforma de video falsa: no decodifica nada, solo informa el
 /// tamaño (efectivo, ya rotado) del video asignado.
@@ -98,12 +89,7 @@ AssignmentMedia _mediaUrl(String name) => AssignmentMedia(
 
 Future<PlaybackApplier> _pumpScreen(WidgetTester tester) async {
   await tester.pumpWidget(
-    CauceStreamApp(
-      home: AutoPlaybackScreen(
-        driveService: _FakeDriveService(),
-        retryOnError: false,
-      ),
-    ),
+    CauceStreamApp(home: const AutoPlaybackScreen(retryOnError: false)),
   );
   await tester.pump();
   final state = tester.state<State<AutoPlaybackScreen>>(
@@ -118,11 +104,7 @@ Future<PlaybackApplier> _pumpScreenWithUrlBuilder(
 ) async {
   await tester.pumpWidget(
     CauceStreamApp(
-      home: AutoPlaybackScreen(
-        driveService: _FakeDriveService(),
-        retryOnError: false,
-        urlViewBuilder: builder,
-      ),
+      home: AutoPlaybackScreen(retryOnError: false, urlViewBuilder: builder),
     ),
   );
   await tester.pump();

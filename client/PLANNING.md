@@ -1,4 +1,9 @@
-# CAUCE Stream - Plan de Desarrollo
+# CAUCE Stream - Plan de Desarrollo (HISTORICO)
+
+> **OBSOLETO:** este plan corresponde a la fase inicial con catalogo en
+> Google Drive. Esa integracion fue eliminada: el contenido llega solo
+> desde el servidor Cauce y sin asignacion la app muestra el screensaver
+> DVD del logo (ver README.md y CAUCE_SPEC.md actuales).
 
 ## Fase 1: Configuracion del Entorno ✓
 

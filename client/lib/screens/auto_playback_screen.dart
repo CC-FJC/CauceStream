@@ -4,16 +4,13 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
-import '../config/constants.dart';
 import '../models/playback_message.dart';
-import '../models/video_item.dart';
-import '../services/google_drive_service.dart';
 import '../services/playback_socket_service.dart';
+import '../widgets/dvd_screensaver.dart';
 import '../widgets/kiosk_web_view.dart';
 import '../widgets/river_loading_indicator.dart';
 
@@ -25,7 +22,6 @@ typedef UrlViewBuilder = Widget Function(
 );
 
 class AutoPlaybackScreen extends StatefulWidget {
-  final GoogleDriveService? driveService;
   final PlaybackSocketService? playbackService;
   final bool retryOnError;
 
@@ -36,7 +32,6 @@ class AutoPlaybackScreen extends StatefulWidget {
 
   const AutoPlaybackScreen({
     super.key,
-    this.driveService,
     this.playbackService,
     this.retryOnError = true,
     this.urlViewBuilder,
@@ -48,8 +43,8 @@ class AutoPlaybackScreen extends StatefulWidget {
 
 /// Qué hay en pantalla ahora mismo.
 enum _DisplayMode {
-  /// Screensaver de Google Drive en bucle (comportamiento por defecto,
-  /// sin asignación vigente del servidor).
+  /// Screensaver clásico (logo CAUCE rebotando en los bordes): comportamiento
+  /// por defecto cuando el servidor no tiene contenido asignado.
   screensaver,
 
   /// Video asignado por Cauce reproduciéndose en bucle.
@@ -68,11 +63,9 @@ enum _DisplayMode {
 
 class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
     implements PlaybackApplier {
-  late final GoogleDriveService _driveService;
   VideoPlayerController? _controller;
   bool _initialized = false;
   String? _statusMessage;
-  int _loadRetryCount = 0;
   int _initRetryCount = 0;
   bool _disposed = false;
   bool _recovering = false;
@@ -109,10 +102,9 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   @override
   void initState() {
     super.initState();
-    _driveService = widget.driveService ?? GoogleDriveService();
-    _loadAndPlay(_displayGen);
-    // El servicio global (WS de playback) nos drive mediante este
-    // applier; sin servicio la pantalla funciona como screensaver.
+    // Sin asignación del servidor la pantalla arranca directamente en el
+    // screensaver (logo rebotando); no hay nada que cargar de la red.
+    // El servicio global (WS de playback) nos conduce mediante este applier.
     widget.playbackService?.attach(this);
   }
 
@@ -299,10 +291,10 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   @override
   Future<bool> showDefault() async {
     if (_disposed) return false;
-    // Ya estamos en el modo por defecto con el bucle vivo: nada que
-    // hacer (el bucle del screensaver sigue su curso).
+    // Ya en el modo por defecto (screensaver con el logo rebotando).
     if (_mode == _DisplayMode.screensaver) return true;
-    final gen = ++_displayGen;
+    // Nueva generación: invalida cargas pendientes de órdenes viejas.
+    ++_displayGen;
     _stopVideo();
     _failPendingUrlLoads();
     _disposePdf();
@@ -311,69 +303,7 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
       _initialized = false;
       _statusMessage = null;
     });
-    _loadAndPlay(gen);
     return true;
-  }
-
-  // --- Screensaver (comportamiento por defecto, Google Drive) ---
-
-  Future<void> _loadAndPlay(int gen) async {
-    while (!_disposed) {
-      if (gen != _displayGen) return;
-      try {
-        _setStatus('Cargando video...');
-        final items = await _driveService.listMediaInFolder(
-          AppConfig.playbackFolderId,
-        );
-        if (_disposed || gen != _displayGen) return;
-
-        final video = items.cast<VideoItem?>().firstWhere(
-              (item) =>
-                  item != null &&
-                  item.type == 'video' &&
-                  item.name.toLowerCase() == 'screensaver',
-              orElse: () => null,
-            );
-
-        if (video == null) {
-          debugPrint('[CAUCE] No se encontró screensaver.mp4 en la carpeta');
-          _setStatus('Buscando screensaver.mp4...');
-          if (!widget.retryOnError) return;
-          await _waitSeconds(10);
-          continue;
-        }
-
-        debugPrint('[CAUCE] Video seleccionado: ${video.name} (${video.id})');
-        final cacheFile = await _cacheVideo(video);
-        if (_disposed || gen != _displayGen) return;
-        await _initVideoController(cacheFile, gen);
-        return;
-      } catch (e) {
-        debugPrint('[CAUCE] Error al obtener el video: $e');
-        _loadRetryCount++;
-        _setStatus('Error de conexión. Reintentando...');
-        if (!widget.retryOnError) return;
-        await _waitSeconds(math.min(5 + _loadRetryCount * 2, 30));
-      }
-    }
-  }
-
-  Future<File> _cacheVideo(VideoItem video) async {
-    final dir = await getTemporaryDirectory();
-    final fileName = 'screensaver_${video.id}.mp4';
-    final file = File('${dir.path}/$fileName');
-
-    if (await file.exists() && await file.length() > 0) {
-      debugPrint('[CAUCE] Usando video en caché: ${file.path}');
-      return file;
-    }
-
-    _setStatus('Descargando video...');
-    debugPrint('[CAUCE] Descargando video a caché...');
-    await _driveService.downloadFile(video.fileUrl, file);
-    debugPrint(
-        '[CAUCE] Descarga completada: ${file.path} (${await file.length()} bytes)');
-    return file;
   }
 
   /// Inicializa y reproduce [file] en bucle, con reintentos. Retorna
@@ -452,10 +382,8 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
         if (_mode == _DisplayMode.assignedVideo && _assignedVideoFile != null) {
           // El archivo ya está en caché: reintentar solo el reproductor.
           await _initVideoController(_assignedVideoFile!, gen);
-        } else if (_mode == _DisplayMode.screensaver) {
-          await _loadAndPlay(gen);
         }
-        // Imágenes y url no tienen reproductor que recuperar.
+        // Screensaver, imágenes y url no tienen reproductor que recuperar.
       } finally {
         _recovering = false;
       }
@@ -520,7 +448,6 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
     _stopWatchdog();
     _controller?.removeListener(_onControllerUpdate);
     _controller?.dispose();
-    _driveService.dispose();
     super.dispose();
   }
 
@@ -531,10 +458,11 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
       child: Scaffold(
         backgroundColor: Colors.black,
         body: switch (_mode) {
+          _DisplayMode.screensaver => const DvdScreensaver(),
           _DisplayMode.assignedImage => _buildAssignedImage(),
           _DisplayMode.assignedUrl => _buildAssignedUrl(),
           _DisplayMode.assignedPdf => _buildAssignedPdf(),
-          _ => _initialized && _controller != null
+          _DisplayMode.assignedVideo => _initialized && _controller != null
               ? _buildPlayer()
               : _buildLoading(),
         },
