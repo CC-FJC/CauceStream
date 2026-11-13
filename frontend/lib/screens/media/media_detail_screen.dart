@@ -28,6 +28,7 @@ import '../../models/media.dart';
 import '../../services/assignment_service.dart';
 import '../../services/thumbnail_service.dart';
 import '../../widgets/cauce_headers.dart';
+import '../../widgets/delete_section.dart';
 import '../../widgets/organic_background.dart';
 
 class MediaDetailScreen extends StatefulWidget {
@@ -58,34 +59,13 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
 
   Future<void> _confirmDelete() async {
     final media = widget.media;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showDeleteConfirmation(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: CauceColors.cream,
-        title: const Text('Eliminar medio'),
-        content: Text(
-          'Se eliminara "${media.name}" del servidor de la sala. Esta '
+      title: 'Eliminar medio',
+      message: 'Se eliminara "${media.name}" del servidor de la sala. Esta '
           'accion no se puede deshacer.',
-          style: const TextStyle(
-            fontFamily: CauceTheme.bodyFont,
-            fontSize: 13,
-            height: 1.4,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: CauceColors.error),
-            child: const Text('Eliminar'),
-          ),
-        ],
-      ),
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     final controller = context.read<MediaLibraryController>();
     final ok = await controller.remove(media);
@@ -194,7 +174,13 @@ class _MediaDetailScreenState extends State<MediaDetailScreen> {
                       ],
                       if (canManage) ...[
                         const SizedBox(height: 16),
-                        _DangerZone(media: media, onDelete: _confirmDelete),
+                        DeleteSection(
+                          warning:
+                              'Se eliminara "${media.name}" del servidor de '
+                              'la sala. Esta accion no se puede deshacer.',
+                          buttonLabel: 'Eliminar Medio del Circuito de Sala',
+                          onDelete: _confirmDelete,
+                        ),
                       ],
                     ],
                   ),
@@ -539,61 +525,6 @@ class _MetadataCard extends StatelessWidget {
               ),
             ),
           ],
-        ],
-      ),
-    );
-  }
-}
-
-class _DangerZone extends StatelessWidget {
-  const _DangerZone({required this.media, required this.onDelete});
-
-  final Media media;
-  final VoidCallback onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFDAD6),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.warning, size: 20, color: CauceColors.error),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Se eliminara "${media.name}" del servidor de la sala. '
-                  'Esta accion no se puede deshacer.',
-                  style: const TextStyle(
-                    fontFamily: CauceTheme.bodyFont,
-                    fontSize: 13,
-                    height: 1.4,
-                    color: CauceColors.creamOnSurfaceVariant,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: onDelete,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: CauceColors.error,
-              side: const BorderSide(color: CauceColors.error),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              padding: const EdgeInsets.symmetric(vertical: 10),
-            ),
-            icon: const Icon(Icons.delete_forever, size: 20),
-            label: const Text('Eliminar Medio del Circuito de Sala'),
-          ),
         ],
       ),
     );

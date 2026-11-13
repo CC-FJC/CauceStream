@@ -1,8 +1,10 @@
 // Indicador LAN: sondeo del endpoint de salud del servidor Cauce
-// (GET /api/health -> {"status": "ok"}). Cubre los casos exigidos:
-// servidor respondiendo, servidor detenido, timeout de red, uso de
-// la direccion local mientras Tailscale este vacia, UI no bloqueada
-// durante la comprobacion y recuperacion automatica.
+// (GET /api/health -> {"status": "ok"}). Cubre los estados exigidos:
+// servidor respondiendo (active), servidor apagado (off: refused,
+// timeout, respuesta invalida) y red inaccesible (unreachable: sin
+// ruta o DNS caido), uso de la direccion local mientras Tailscale este
+// vacia, UI no bloqueada durante la comprobacion, recuperacion
+// automatica y reintento ante fallos transitorios de red.
 import 'dart:async';
 import 'dart:io';
 
@@ -19,8 +21,7 @@ import 'package:cauce_stream/widgets/identity_widgets.dart';
 
 void main() {
   group('ConnectivityService', () {
-    test('considera activa solo la respuesta del contrato de salud',
-        () async {
+    test('considera activo solo el contrato de salud', () async {
       final requests = <Uri>[];
       final service = ConnectivityService(
         client: MockClient((request) async {
@@ -30,39 +31,39 @@ void main() {
         }),
         serverUrl: 'http://10.15.1.150:8000',
       );
-      expect(await service.check(), isTrue);
+      expect(await service.check(), ServerHealth.active);
       expect(
         requests.single.toString(),
         'http://10.15.1.150:8000/api/health',
       );
     });
 
-    test('cuerpo invalido o status distinto no cuentan como LAN activa',
+    test('cuerpo invalido o status distinto reportan servidor apagado',
         () async {
       final service = ConnectivityService(
         client: MockClient((request) async => http.Response('{"status": "no"}', 200)),
         serverUrl: 'http://10.15.1.150:8000',
       );
-      expect(await service.check(), isFalse);
+      expect(await service.check(), ServerHealth.off);
 
       final errorStatus = ConnectivityService(
         client: MockClient((request) async => http.Response('boom', 500)),
         serverUrl: 'http://10.15.1.150:8000',
       );
-      expect(await errorStatus.check(), isFalse);
+      expect(await errorStatus.check(), ServerHealth.off);
     });
 
-    test('servidor detenido (socket) reporta LAN inactiva', () async {
+    test('servidor detenido (connection refused) reporta apagado', () async {
       final service = ConnectivityService(
         client: MockClient((request) async {
-          throw const SocketException('connection refused');
+          throw const SocketException('Connection refused');
         }),
         serverUrl: 'http://10.15.1.150:8000',
       );
-      expect(await service.check(), isFalse);
+      expect(await service.check(), ServerHealth.off);
     });
 
-    test('timeout de red reporta LAN inactiva', () async {
+    test('timeout de red reporta servidor apagado', () async {
       final service = ConnectivityService(
         client: MockClient((request) async {
           await Future<void>.delayed(const Duration(seconds: 30));
@@ -72,8 +73,88 @@ void main() {
         timeout: const Duration(milliseconds: 20),
       );
       final sw = Stopwatch()..start();
-      expect(await service.check(), isFalse);
+      expect(await service.check(), ServerHealth.off);
       expect(sw.elapsed, lessThan(const Duration(seconds: 5)));
+    });
+
+    test('un fallo transitorio se recupera en el reintento', () async {
+      // El primer intento se pierde (red congestionada), el segundo
+      // pasa: la pastilla no debe caer por un sondeo perdido.
+      var calls = 0;
+      final service = ConnectivityService(
+        client: MockClient((request) async {
+          calls++;
+          if (calls == 1) {
+            throw const SocketException('Connection refused');
+          }
+          return http.Response('{"status": "ok"}', 200);
+        }),
+        serverUrl: 'http://10.15.1.150:8000',
+      );
+      expect(await service.check(), ServerHealth.active);
+      expect(calls, 2);
+    });
+
+    test('un fallo transitorio de red se recupera en el reintento',
+        () async {
+      var calls = 0;
+      final service = ConnectivityService(
+        client: MockClient((request) async {
+          calls++;
+          if (calls == 1) {
+            throw const SocketException('Network is unreachable');
+          }
+          return http.Response('{"status": "ok"}', 200);
+        }),
+        serverUrl: 'http://10.15.1.150:8000',
+      );
+      expect(await service.check(), ServerHealth.active);
+      expect(calls, 2);
+    });
+
+    test('sin ruta hacia la red reporta red inaccesible', () async {
+      final service = ConnectivityService(
+        client: MockClient((request) async {
+          throw const SocketException('No route to host');
+        }),
+        serverUrl: 'http://10.15.1.150:8000',
+      );
+      expect(await service.check(), ServerHealth.unreachable);
+    });
+
+    test('fallo de DNS reporta red inaccesible', () async {
+      final service = ConnectivityService(
+        client: MockClient((request) async {
+          throw const SocketException('Failed host lookup: \'10.15.1.150\'');
+        }),
+        serverUrl: 'http://10.15.1.150:8000',
+      );
+      expect(await service.check(), ServerHealth.unreachable);
+    });
+
+    test('codigo de SO conocido clasifica sin depender del mensaje',
+        () async {
+      final refused = ConnectivityService(
+        client: MockClient((request) async {
+          throw SocketException(
+            'x',
+            osError: OSError('Connection refused', 111),
+          );
+        }),
+        serverUrl: 'http://10.15.1.150:8000',
+      );
+      expect(await refused.check(), ServerHealth.off);
+
+      final noRoute = ConnectivityService(
+        client: MockClient((request) async {
+          throw SocketException(
+            'x',
+            osError: OSError('No route to host', 113),
+          );
+        }),
+        serverUrl: 'http://10.15.1.150:8000',
+      );
+      expect(await noRoute.check(), ServerHealth.unreachable);
     });
   });
 
@@ -102,14 +183,14 @@ void main() {
       controller.dispose();
     });
 
-    testWidgets('el backend esta detenido: badge Servidor Inactivo y '
+    testWidgets('el backend esta detenido: badge Servidor Apagado y '
         'recuperacion automatica al volver', (tester) async {
       var up = false;
       final controller = ConnectivityController(
         service: ConnectivityService(
           client: MockClient((request) async {
             if (!up) {
-              throw const SocketException('connection refused');
+              throw const SocketException('Connection refused');
             }
             return http.Response(okBody, 200);
           }),
@@ -117,13 +198,28 @@ void main() {
         interval: const Duration(milliseconds: 40),
       );
       await _pumpBadge(tester, controller);
-      expect(find.text('Servidor\nInactivo'), findsOneWidget);
+      expect(find.text('Servidor\nApagado'), findsOneWidget);
 
       // La red vuelve: el sondeo periodico recupera el estado sin
       // recargar nada.
       up = true;
       await tester.pump(const Duration(milliseconds: 60));
       expect(find.text('Servidor\nActivo'), findsOneWidget);
+      controller.dispose();
+    });
+
+    testWidgets('sin red: badge Red Inaccesible', (tester) async {
+      final controller = ConnectivityController(
+        service: ConnectivityService(
+          client: MockClient((request) async {
+            throw const SocketException('Network is unreachable');
+          }),
+        ),
+        interval: const Duration(milliseconds: 40),
+      );
+      await _pumpBadge(tester, controller);
+      expect(find.text('Red\nInaccesible'), findsOneWidget);
+      expect(controller.status, LanStatus.unreachable);
       controller.dispose();
     });
 
@@ -142,7 +238,7 @@ void main() {
       await _pumpBadge(tester, controller);
       expect(find.text('Comprobando'), findsOneWidget);
 
-      // El servidor termina de responder: el badge pasa a activa sin
+      // El servidor termina de responder: el badge pasa a activo sin
       // ninguna intervencion del usuario.
       response.complete(http.Response(okBody, 200));
       await tester.pump(const Duration(milliseconds: 50));

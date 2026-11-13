@@ -1,4 +1,4 @@
-/// Pantalla de Perfil y Sesion.
+/// Pantalla de Perfil.
 ///
 /// Integracion real dentro de los contratos disponibles:
 /// - El backend no expone `/users/me`; el id del usuario se decodifica
@@ -62,10 +62,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Cerrar Sesion de Mediacion?'),
+        title: const Text('¿Cerrar Sesion?'),
         content: const Text(
-          'Se eliminara el token de acceso guardado en este dispositivo y '
-          'volveras a la pantalla de ingreso.',
+          'Se cerrara tu sesion en este dispositivo y volveras a la '
+          'pantalla de ingreso.',
         ),
         actions: [
           TextButton(
@@ -99,9 +99,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Column(
             children: [
               const StackHeader(
-                title: 'Perfil & Sesion',
+                title: 'Perfil',
                 closeInsteadOfBack: true,
-                subtitle: 'CAUCE_STREAM',
+                showLogo: false,
                 showLanBadge: false,
                 backgroundColor: CauceColors.creamSurface,
               ),
@@ -253,125 +253,87 @@ class _IdentityCard extends StatelessWidget {
           BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 4),
         ],
       ),
-      child: Row(
+      // Sin foto de perfil: el dominio no contempla imagenes de
+      // usuario, la tarjeta muestra identidad textual.
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Stack(
+          Row(
             children: [
-              Container(
-                width: 64,
-                height: 64,
-                padding: const EdgeInsets.all(8),
-                decoration: const BoxDecoration(
-                  color: CauceColors.creamSecondaryFixed,
-                  shape: BoxShape.circle,
-                ),
-                child: Image.asset('assets/logo_iso.png', fit: BoxFit.contain),
-              ),
-              Positioned(
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF10B981),
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: CauceColors.creamSurfaceContainerLow,
-                      width: 2,
-                    ),
+              Expanded(
+                child: Text(
+                  name,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: CauceTheme.displayFont,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: CauceColors.creamOnSurface,
                   ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD1FAE5),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.circle, size: 6, color: Color(0xFF047857)),
+                    SizedBox(width: 4),
+                    Text(
+                      'Activa',
+                      style: TextStyle(
+                        fontFamily: CauceTheme.bodyFont,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF065F46),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        name,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontFamily: CauceTheme.displayFont,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w600,
-                          color: CauceColors.creamOnSurface,
-                        ),
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFD1FAE5),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.circle, size: 6, color: Color(0xFF047857)),
-                          SizedBox(width: 4),
-                          Text(
-                            'Activa',
-                            style: TextStyle(
-                              fontFamily: CauceTheme.bodyFont,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF065F46),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  // Rol mostrado: real cuando el backend lo permite;
-                  // para un token sin acceso a /users se infiere
-                  // "Mediador" (unico otro rol del dominio).
-                  restricted
-                      ? 'Mediador'
-                      : (isAdmin ? 'Administrador' : 'Mediador'),
+          const SizedBox(height: 2),
+          Text(
+            // Rol mostrado: real cuando el backend lo permite;
+            // para un token sin acceso a /users se infiere
+            // "Mediador" (unico otro rol del dominio).
+            restricted ? 'Mediador' : (isAdmin ? 'Administrador' : 'Mediador'),
+            style: const TextStyle(
+              fontFamily: CauceTheme.bodyFont,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: CauceColors.creamOnSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(
+                Icons.mail_outline,
+                size: 14,
+                color: CauceColors.creamTertiary,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  shownEmail,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontFamily: CauceTheme.bodyFont,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: CauceColors.creamOnSurfaceVariant,
+                    fontSize: 12,
+                    color: CauceColors.creamTertiary,
                   ),
                 ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.mail_outline,
-                      size: 14,
-                      color: CauceColors.creamTertiary,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        shownEmail,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontFamily: CauceTheme.bodyFont,
-                          fontSize: 12,
-                          color: CauceColors.creamTertiary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ],
       ),
@@ -427,7 +389,6 @@ class _AccountInfoCard extends StatelessWidget {
             label: 'Rol',
             value: user.isAdmin ? 'ADMINISTRADOR' : 'MEDIADOR',
           ),
-          _AccountRow(label: 'ID de usuario', value: '${user.id}'),
           _AccountRow(label: 'Creado', value: _formatDate(user.createdAt)),
           _AccountRow(
             label: 'Ultima actualizacion',
@@ -484,7 +445,6 @@ class _AlertsCard extends StatefulWidget {
 
 class _AlertsCardState extends State<_AlertsCard> {
   bool _lanAlerts = true;
-  bool _sync = false;
 
   @override
   Widget build(BuildContext context) {
@@ -523,14 +483,6 @@ class _AlertsCardState extends State<_AlertsCard> {
             subtitle: 'Avisos ante desconexion de nodos',
             value: _lanAlerts,
             onChanged: (v) => setState(() => _lanAlerts = v),
-          ),
-          const SizedBox(height: 8),
-          _AlertSwitch(
-            icon: Icons.sync,
-            title: 'Sincronizacion Continua',
-            subtitle: 'Intercambio de metricas en segundo plano',
-            value: _sync,
-            onChanged: (v) => setState(() => _sync = v),
           ),
         ],
       ),
@@ -785,22 +737,6 @@ class _SecurityCard extends StatelessWidget {
             label: 'Editar nombre y correo',
             onTap: () => _openEditDialog(context),
           ),
-          const SizedBox(height: 6),
-          _SecurityRow(
-            icon: Icons.report_problem,
-            iconBg: CauceColors.yellow.withValues(alpha: 0.2),
-            iconColor: CauceColors.creamOnSurface,
-            label: 'Notificar Incidencia Tecnica',
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'El registro de incidencias llegara en una fase posterior.',
-                  ),
-                ),
-              );
-            },
-          ),
         ],
       ),
     );
@@ -884,7 +820,7 @@ class _LogoutButton extends StatelessWidget {
       ),
       icon: const Icon(Icons.logout, size: 20),
       label: const Text(
-        'Cerrar Sesion Activa',
+        'Cerrar Sesion',
         style: TextStyle(
           fontFamily: CauceTheme.bodyFont,
           fontSize: 16,

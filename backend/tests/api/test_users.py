@@ -172,6 +172,40 @@ async def test_cannot_deactivate_self(client, admin):
     assert response.json()["code"] == "bad_request"
 
 
+async def test_admin_deletes_mediator(client, admin, mediator):
+    """The physical DELETE removes the row: the user is gone for
+    good (unlike deactivate, which only flips is_active)."""
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    response = await client.delete(f"/api/users/{mediator.id}", headers=bearer(token))
+    assert response.status_code == 204
+
+    response = await client.get(f"/api/users/{mediator.id}", headers=bearer(token))
+    assert response.status_code == 404
+
+    listed = await client.get("/api/users", headers=bearer(token))
+    emails = {user["email"] for user in listed.json()}
+    assert MEDIATOR_EMAIL not in emails
+
+
+async def test_delete_requires_management_permission(client, admin, mediator):
+    token = await login(client, MEDIATOR_EMAIL, MEDIATOR_PASSWORD)
+    response = await client.delete(f"/api/users/{admin.id}", headers=bearer(token))
+    assert response.status_code == 403
+
+
+async def test_cannot_delete_self(client, admin):
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    response = await client.delete(f"/api/users/{admin.id}", headers=bearer(token))
+    assert response.status_code == 400
+    assert response.json()["code"] == "bad_request"
+
+
+async def test_delete_unknown_user_404(client, admin):
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    response = await client.delete("/api/users/9999", headers=bearer(token))
+    assert response.status_code == 404
+
+
 async def test_pin_format_is_enforced(client, admin):
     """Passwords must be exactly 4 numeric digits."""
     token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)

@@ -1,9 +1,12 @@
 /// Pantalla de inicio de sesion.
 ///
-/// Reproduce la referencia login_cauce_stream (Stitch): badge de LAN,
-/// logo completo, tarjeta de acceso con correo + PIN de 4 digitos y
-/// estados de carga/exito/error. La autenticacion es real contra
-/// POST /api/auth/login del backend FastAPI.
+/// Reproduce la referencia login_cauce_stream (Stitch): badge de LAN
+/// en la esquina superior derecha, logo completo abajo, tarjeta de
+/// acceso con correo + PIN de 4 digitos y estados de
+/// carga/exito/error. La tarjeta conserva su tamano natural: no se
+/// encoge con el teclado numerico ni al mostrar feedback. La
+/// autenticacion es real contra POST /api/auth/login del backend
+/// FastAPI.
 library;
 
 import 'package:flutter/material.dart';
@@ -230,8 +233,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Con el teclado abierto la seccion de marca de abajo se oculta:
-    // el espacio restante queda para el formulario, sin scroll.
+    // Con el teclado abierto la seccion de marca de abajo se oculta
+    // para dejar aire al formulario; la tarjeta conserva siempre su
+    // tamano natural y solo se desplaza si falta espacio.
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     return Scaffold(
       resizeToAvoidBottomInset: true,
@@ -244,20 +248,27 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 children: [
                   const SizedBox(height: 8),
+                  // Pastilla de estado del servidor, anclada en la
+                  // esquina superior derecha; fuera del bloque del
+                  // teclado para que siga visible al escribir.
+                  const Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [LanBadge()],
+                  ),
+                  const SizedBox(height: 4),
                   const _BrandTitle(),
                   Expanded(
                     child: LayoutBuilder(
                       builder: (context, constraints) {
-                        return Center(
-                          // En pantallas cortas el formulario se
-                          // encoge en lugar de desbordar: la vista
-                          // nunca necesita scroll.
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: SizedBox(
-                              width: constraints.maxWidth,
-                              child: _loginForm(),
+                        // Tamano natural siempre: ni el teclado ni
+                        // una pantalla corta encogen la tarjeta; con
+                        // poco espacio el area se desplaza.
+                        return SingleChildScrollView(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minHeight: constraints.maxHeight,
                             ),
+                            child: Center(child: _loginForm()),
                           ),
                         );
                       },
@@ -325,8 +336,6 @@ class _BrandSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        const LanBadge(),
-        const SizedBox(height: 12),
         Image.asset(
           'assets/logo_completo.png',
           width: 120,
@@ -427,7 +436,7 @@ class _LoginForm extends StatelessWidget {
             GestureDetector(
               onTap: onForgotPin,
               child: Text(
-                'Olvidaste tu PIN?',
+                '¿Olvidaste tu PIN?',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontFamily: CauceTheme.bodyFont,
@@ -439,29 +448,39 @@ class _LoginForm extends StatelessWidget {
                 ),
               ),
             ),
-            if (feedback != null) ...[
-              const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: feedback!.$1,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: feedback!.$2.withValues(alpha: 0.25),
-                  ),
-                ),
-                child: Text(
-                  feedback!.$3,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontFamily: CauceTheme.bodyFont,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: feedback!.$2,
-                  ),
-                ),
-              ),
-            ],
+            const SizedBox(height: 14),
+            // Slot de altura fija: el mensaje de feedback (error o
+            // "Conectando...") aparece y desaparece sin alterar el
+            // tamano de la tarjeta.
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 58),
+              child: feedback == null
+                  ? const SizedBox.shrink()
+                  : Container(
+                      alignment: Alignment.center,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: feedback!.$1,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: feedback!.$2.withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: Text(
+                        feedback!.$3,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontFamily: CauceTheme.bodyFont,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: feedback!.$2,
+                        ),
+                      ),
+                    ),
+            ),
           ],
         ),
       ),
@@ -651,7 +670,7 @@ class _LoginForm extends StatelessWidget {
               ),
             )
           : const Text(
-              'Ingresar al Circuito',
+              'Ingresar',
               style: TextStyle(
                 fontFamily: CauceTheme.bodyFont,
                 fontSize: 16,
@@ -670,42 +689,14 @@ class _LoginFooter extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 16, bottom: 8),
-      child: Column(
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.shield_outlined,
-                size: 14,
-                color: Color(0xFF059669),
-              ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    'Autenticacion local aislada en nodo servidor CAUCE',
-                    style: TextStyle(
-                      fontFamily: CauceTheme.bodyFont,
-                      fontSize: 11,
-                      color: CauceColors.brown.withValues(alpha: 0.75),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Version ${AppInfo.appVersion} • Nodo Central ${AppInfo.serverNode}',
-            style: TextStyle(
-              fontFamily: CauceTheme.bodyFont,
-              fontSize: 10,
-              color: Colors.black.withValues(alpha: 0.35),
-            ),
-          ),
-        ],
+      child: Text(
+        'Version ${AppInfo.appVersion}',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontFamily: CauceTheme.bodyFont,
+          fontSize: 10,
+          color: Colors.black.withValues(alpha: 0.35),
+        ),
       ),
     );
   }

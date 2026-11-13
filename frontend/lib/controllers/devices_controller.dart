@@ -198,6 +198,24 @@ class DevicesController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Elimina un dispositivo del inventario y recarga la lista desde
+  /// el servidor (nunca estado optimista). El backend borra en
+  /// cascada su historial y su asignacion vigente; el sondeo repone
+  /// ambas listas. Devuelve false si el backend rechaza la operacion
+  /// (el mensaje queda en [errorMessage]) sin lanzar, igual que el
+  /// resto del sondeo.
+  Future<bool> remove(Device device) async {
+    try {
+      await _service.deleteDevice(device.deviceUid);
+    } on ApiException catch (e) {
+      _errorMessage = e.message;
+      notifyListeners();
+      return false;
+    }
+    await refresh();
+    return true;
+  }
+
   /// Asignacion vigente de un dispositivo; null si no tiene.
   Assignment? assignmentOf(String deviceUid) {
     for (final a in _assignments) {

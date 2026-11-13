@@ -9,8 +9,21 @@ import '../core/config/api_config.dart';
 import '../core/theme/cauce_colors.dart';
 import '../core/theme/cauce_theme.dart';
 
-/// Badge LAN de los encabezados: refleja si la app puede hablar con
-/// el servidor Cauce (sondeo del endpoint de salud). Sin provider de
+/// Palabras que puede mostrar [LanBadge] en su etiqueta; la mas ancha
+/// fija el ancho del texto para que la pastilla nunca cambie de tamano
+/// al alternar de estado. [DeviceConnectionStatus] la reutiliza para
+/// calcular el centro de la pastilla en el encabezado.
+const List<String> lanBadgeLabelWords = [
+  'Servidor',
+  'Activo',
+  'Apagado',
+  'Inaccesible',
+  'Comprobando',
+];
+
+/// Badge LAN de los encabezados y del login: refleja si la app puede
+/// hablar con el servidor Cauce (sondeo del endpoint de salud).
+/// Distingue activo, apagado y red inaccesible. Sin provider de
 /// conectividad en el arbol (tests/preview) queda en estado neutro.
 /// Compacto y sin IPs ni errores tecnicos en pantalla.
 class LanBadge extends StatelessWidget {
@@ -35,10 +48,15 @@ class LanBadge extends StatelessWidget {
         'Servidor\nActivo',
         'Servidor Cauce activo',
       ),
-      LanStatus.inactive => (
+      LanStatus.off => (
         CauceColors.error,
-        'Servidor\nInactivo',
-        'Servidor Cauce inactivo',
+        'Servidor\nApagado',
+        'Servidor Cauce apagado',
+      ),
+      LanStatus.unreachable => (
+        CauceColors.brown,
+        'Red\nInaccesible',
+        'Red local inaccesible con el servidor Cauce',
       ),
       LanStatus.checking => (
         CauceColors.peachSecondary,
@@ -55,17 +73,12 @@ class LanBadge extends StatelessWidget {
       color: foregroundColor ?? CauceColors.darkTeal,
     );
     // Ancho fijo: el badge nunca cambia de tamano al alternar entre
-    // Comprobando y Servidor Activo/Inactivo, asi ni el badge ni el
-    // avatar del encabezado se mueven de posicion. Se mide la palabra
-    // mas ancha (Comprobando) con el escalado de texto vigente.
+    // sus estados, asi ni el badge ni el avatar del encabezado se
+    // mueven de posicion. Se mide la palabra mas ancha de
+    // [lanBadgeLabelWords] con el escalado de texto vigente.
     final textScaler = MediaQuery.textScalerOf(context);
     var labelWidth = 0.0;
-    for (final word in const [
-      'Servidor',
-      'Activo',
-      'Inactivo',
-      'Comprobando',
-    ]) {
+    for (final word in lanBadgeLabelWords) {
       final painter = TextPainter(
         text: TextSpan(text: word, style: style),
         textDirection: TextDirection.ltr,
@@ -76,7 +89,8 @@ class LanBadge extends StatelessWidget {
     return Semantics(
       label: semantics,
       // Tooltip con la URL activa del servidor: si el badge dice
-      // "Inactivo", aqui se confirma a que direccion se sondea.
+      // "Apagado" o "Red Inaccesible", aqui se confirma a que
+      // direccion se sondea.
       child: Tooltip(
         message: 'Servidor: ${ApiConfig.activeServerUrl}',
         child: Container(

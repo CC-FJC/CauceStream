@@ -1,5 +1,5 @@
 // Prueba de integracion del flujo de login: escribe correo + PIN en la
-// pantalla real, pulsa "Ingresar al Circuito" y verifica que se envia
+// pantalla real, pulsa "Ingresar" y verifica que se envia
 // el POST al contrato del backend con el cuerpo correcto. Usa los
 // assets reales del paquete (disponibles en flutter test).
 import 'dart:convert';
@@ -10,12 +10,14 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
 
+import 'package:cauce_stream/core/app_info.dart';
 import 'package:cauce_stream/core/network/api_client.dart';
 import 'package:cauce_stream/screens/login/login_screen.dart';
 import 'package:cauce_stream/services/auth_service.dart';
 import 'package:cauce_stream/services/user_service.dart';
 import 'package:cauce_stream/session/session_controller.dart';
 import 'package:cauce_stream/session/token_storage.dart';
+import 'package:cauce_stream/widgets/identity_widgets.dart';
 
 class _FakeStorage implements TokenStorage {
   String? _token;
@@ -147,6 +149,96 @@ void main() {
           'No hay conexion con el servidor Cauce. Verifica la red de la sala.'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('la pastilla de estado del servidor queda en la esquina '
+      'superior derecha, sobre el formulario', (tester) async {
+    requests = [];
+    final mock = MockClient((request) async => http.Response('{}', 200));
+    await pumpApp(tester, mock);
+
+    final badge = tester.getRect(find.byType(LanBadge));
+    final formTitle = tester.getRect(find.text('Iniciar Sesion'));
+    final size = tester.view.physicalSize / tester.view.devicePixelRatio;
+
+    // Arriba del titulo del formulario...
+    expect(badge.bottom, lessThan(formTitle.top));
+    // ...en la mitad derecha de la pantalla...
+    expect(badge.center.dx, greaterThan(size.width / 2));
+    // ...y pegada al borde derecho (padding horizontal de 20).
+    expect(size.width - badge.right, moreOrLessEquals(20, epsilon: 1.5));
+  });
+
+  testWidgets('la tarjeta no cambia de tamano al desplegarse el '
+      'teclado numerico', (tester) async {
+    requests = [];
+    final mock = MockClient((request) async => http.Response('{}', 200));
+    await pumpApp(tester, mock);
+
+    final before = tester.getSize(find.byType(Form));
+
+    // Teclado de ~300 dp sobre la pantalla de prueba.
+    tester.view.viewInsets = FakeViewPadding(
+      bottom: 300 * tester.view.devicePixelRatio,
+    );
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    final after = tester.getSize(find.byType(Form));
+    expect(after.width, moreOrLessEquals(before.width, epsilon: 0.01));
+    expect(after.height, moreOrLessEquals(before.height, epsilon: 0.01));
+
+    tester.view.viewInsets = FakeViewPadding.zero;
+    await tester.pump();
+  });
+
+  testWidgets('la tarjeta no cambia de tamano al mostrar el feedback '
+      'del login', (tester) async {
+    requests = [];
+    final mock = MockClient((request) async {
+      requests.add(request);
+      return http.Response(
+        jsonEncode({
+          'code': 'not_authenticated',
+          'detail': 'Invalid email or password'
+        }),
+        401,
+      );
+    });
+    await pumpApp(tester, mock);
+
+    final before = tester.getRect(find.byType(Form));
+
+    await fillForm(tester);
+    await tester.tap(find.byType(FilledButton));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // El mensaje de error aparece en el slot reservado: la tarjeta
+    // conserva exactamente su tamano y su posicion.
+    expect(find.text('Correo o PIN incorrectos.'), findsOneWidget);
+    final after = tester.getRect(find.byType(Form));
+    expect(after.top, moreOrLessEquals(before.top, epsilon: 0.5));
+    expect(after.bottom, moreOrLessEquals(before.bottom, epsilon: 0.5));
+    expect(after.width, moreOrLessEquals(before.width, epsilon: 0.01));
+    expect(after.height, moreOrLessEquals(before.height, epsilon: 0.5));
+  });
+
+  testWidgets('el boton dice Ingresar y el pie solo muestra la version',
+      (tester) async {
+    requests = [];
+    final mock = MockClient((request) async => http.Response('{}', 200));
+    await pumpApp(tester, mock);
+
+    expect(find.text('Ingresar'), findsOneWidget);
+    expect(find.text('Ingresar al Circuito'), findsNothing);
+    expect(
+      find.textContaining('Version ${AppInfo.appVersion}'),
+      findsOneWidget,
+      reason: 'el pie de pagina conserva la version de la app',
+    );
+    expect(find.textContaining('Nodo Central'), findsNothing);
+    expect(find.textContaining('Autenticacion local'), findsNothing);
   });
 
   testWidgets('PIN incompleto no envia ninguna peticion', (tester) async {

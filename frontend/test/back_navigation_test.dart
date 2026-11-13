@@ -11,10 +11,12 @@ import 'package:provider/provider.dart';
 
 import 'package:cauce_stream/controllers/devices_controller.dart';
 import 'package:cauce_stream/controllers/media_library_controller.dart';
+import 'package:cauce_stream/controllers/users_controller.dart';
 import 'package:cauce_stream/core/network/api_client.dart';
 import 'package:cauce_stream/navigation/main_shell.dart';
 import 'package:cauce_stream/services/device_service.dart';
 import 'package:cauce_stream/services/media_service.dart';
+import 'package:cauce_stream/services/role_service.dart';
 import 'package:cauce_stream/services/thumbnail_service.dart';
 import 'package:cauce_stream/session/session_controller.dart';
 import 'package:cauce_stream/services/auth_service.dart';
@@ -61,6 +63,10 @@ void main() {
       userService: UserService(client: apiClient),
       apiClient: apiClient,
     );
+    final users = UsersController(
+      service: UserService(client: apiClient),
+      roleService: RoleService(client: apiClient),
+    );
 
     await tester.pumpWidget(
       MultiProvider(
@@ -68,6 +74,7 @@ void main() {
           ChangeNotifierProvider.value(value: session),
           ChangeNotifierProvider.value(value: devices),
           ChangeNotifierProvider.value(value: mediaLibrary),
+          ChangeNotifierProvider.value(value: users),
         ],
         child: const MaterialApp(home: MainShell()),
       ),

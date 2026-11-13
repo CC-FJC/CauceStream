@@ -1,5 +1,6 @@
 /// Sondeo de conectividad con el servidor Cauce: alimenta el badge
-/// LAN de los encabezados.
+/// LAN de los encabezados y del login. Distingue activo, apagado y
+/// red inaccesible (ver [ServerHealth]).
 ///
 /// Mismo ciclo de vida que [DevicesController]: un unico timer
 /// compartido mientras la app esta en primer plano, pausado al pasar
@@ -20,11 +21,15 @@ enum LanStatus {
   /// Comprobacion inicial en curso: neutro, sin afirmar conexion.
   checking,
 
-  /// La API del servidor responde correctamente.
+  /// La API del servidor responde correctamente (health OK).
   active,
 
-  /// No se consigue comunicacion valida con la API.
-  inactive,
+  /// Hay red local, pero el servidor no responde: maquina apagada,
+  /// puerto cerrado o respuesta distinta del contrato de salud.
+  off,
+
+  /// La red misma no responde: sin ruta, DNS caido, etc.
+  unreachable,
 }
 
 class ConnectivityController extends ChangeNotifier
@@ -33,8 +38,8 @@ class ConnectivityController extends ChangeNotifier
     : _service = service ?? ConnectivityService(),
       interval = interval ?? ApiConfig.connectivityCheckInterval {
     WidgetsBinding.instance.addObserver(this);
-    // La URL activa queda en el log: si el badge cae en "Inactivo",
-    // aqui se ve a que servidor se le esta pidiendo /api/health.
+    // La URL activa queda en el log: si el badge cae en "Apagado" o
+    // "Red Inaccesible", aqui se ve a que servidor se le sondea.
     debugPrint(
       '[Cauce] sondeo LAN contra ${ApiConfig.activeServerUrl}'
       '/api${ApiConfig.healthPath} cada '
@@ -72,9 +77,13 @@ class ConnectivityController extends ChangeNotifier
   Future<void> _tick() async {
     if (_checking) return;
     _checking = true;
-    final reachable = await _service.check();
+    final health = await _service.check();
     _checking = false;
-    _update(reachable ? LanStatus.active : LanStatus.inactive);
+    _update(switch (health) {
+      ServerHealth.active => LanStatus.active,
+      ServerHealth.off => LanStatus.off,
+      ServerHealth.unreachable => LanStatus.unreachable,
+    });
   }
 
   /// Solo notifica cuando el estado cambia: nada de reconstruir la

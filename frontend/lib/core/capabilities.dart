@@ -25,3 +25,20 @@ bool canManageContent(BuildContext context) =>
 /// 403 del servidor se maneja como red de seguridad.
 bool canControlDevices(BuildContext context) =>
     context.select((SessionController s) => s.isAdmin);
+
+/// `devices.manage` (registrar, editar y eliminar dispositivos del
+/// inventario): en la configuracion actual del backend solo el rol
+/// ADMINISTRADOR lo posee. El backend sigue siendo la autoridad:
+/// esta funcion solo oculta acciones en la interfaz; un 403 del
+/// servidor se maneja como red de seguridad.
+bool canManageDevices(BuildContext context) =>
+    context.select((SessionController s) => s.isAdmin);
+
+/// `users.view` y permisos de gestion de personal (consultar,
+/// crear, editar y activar/desactivar usuarios): en la
+/// configuracion actual del backend solo el rol ADMINISTRADOR los
+/// posee. El backend sigue siendo la autoridad: esta funcion solo
+/// oculta acciones en la interfaz; un 403 del servidor se maneja
+/// como red de seguridad.
+bool canManageUsers(BuildContext context) =>
+    context.select((SessionController s) => s.isAdmin);

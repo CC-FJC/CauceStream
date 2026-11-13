@@ -102,6 +102,24 @@ class UserService:
         await self.session.commit()
         return await self._require_user(user_id)
 
+    async def delete_user(self, actor: User, user_id: int) -> User:
+        """Physically delete a user row (real removal, not is_active).
+
+        Same guard-rails as deactivation: the management permission
+        of the target role and no self-deletion. The room app only
+        uses logical removal (deactivate); this endpoint exists for
+        real cleanups through the API (e.g. badly seeded accounts).
+        """
+        user = await self._require_user(user_id)
+        ensure_permission(actor, _MANAGE_PERMISSION_BY_ROLE[user.role.name])
+
+        if user.id == actor.id:
+            raise BadRequestError("You cannot delete your own account")
+
+        await self.users.delete(user)
+        await self.session.commit()
+        return user
+
     async def _require_user(self, user_id: int) -> User:
         user = await self.users.get_by_id(user_id)
         if user is None:

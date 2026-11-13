@@ -1,7 +1,8 @@
 /// Shell principal con la barra de navegacion inferior de 5 entradas
-/// (Inicio, Dispositivos, Biblioteca, Actividad, Mas), tal como aparece
-/// en las referencias de Stitch. "Mas" abre el perfil, que en las
-/// referencias es una pantalla apilada con cierre.
+/// (Inicio, Dispositivos, Biblioteca, Actividad, Usuarios), tal como
+/// aparece en las referencias de Stitch. "Usuarios" es la pestana de
+/// administracion de personal (la referencia "Mas" fue reemplazada);
+/// el perfil sigue alcanzable desde el avatar del encabezado.
 library;
 
 import 'dart:async';
@@ -10,7 +11,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../app.dart';
 import '../controllers/devices_controller.dart';
 import '../core/theme/cauce_colors.dart';
 import '../core/theme/cauce_theme.dart';
@@ -18,6 +18,7 @@ import '../screens/activities/activities_screen.dart';
 import '../screens/devices/devices_screen.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/media/media_library_screen.dart';
+import '../screens/users/users_screen.dart';
 import '../session/session_controller.dart';
 
 class MainShell extends StatefulWidget {
@@ -42,6 +43,7 @@ class _MainShellState extends State<MainShell> {
     const DevicesScreen(),
     const MediaLibraryScreen(),
     const ActivitiesScreen(),
+    const UsersScreen(),
   ];
 
   @override
@@ -70,10 +72,6 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _onTap(int index) {
-    if (index == 4) {
-      Navigator.of(context).pushNamed(Routes.profile);
-      return;
-    }
     if (index == _currentIndex) return;
     _tabHistory.add(_currentIndex);
     setState(() => _currentIndex = index);
@@ -115,7 +113,7 @@ class _MainShellState extends State<MainShell> {
             SafeArea(
               top: false,
               child: _CauceNavBar(
-                currentIndex: _currentIndex == 4 ? 0 : _currentIndex,
+                currentIndex: _currentIndex,
                 onTap: _onTap,
               ),
             ),
@@ -137,7 +135,7 @@ class _CauceNavBar extends StatelessWidget {
     (Icons.devices, 'Dispositivos'),
     (Icons.video_library, 'Biblioteca'),
     (Icons.hub, 'Actividad'),
-    (Icons.more_horiz, 'Mas'),
+    (Icons.group, 'Usuarios'),
   ];
 
   @override

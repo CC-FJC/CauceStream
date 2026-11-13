@@ -56,7 +56,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Iniciar Sesion'), findsOneWidget);
-    expect(find.text('Ingresar al Circuito'), findsOneWidget);
+    expect(find.text('Ingresar'), findsOneWidget);
   });
 }
 
@@ -108,7 +108,7 @@ class _LoginStub extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text('Iniciar Sesion'),
-            Text('Ingresar al Circuito'),
+            Text('Ingresar'),
           ],
         ),
       ),

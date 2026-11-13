@@ -8,6 +8,10 @@
 /// acciones remotas de energia viajan por el canal WebSocket del
 /// dispositivo. No hay contrato de control de reproduccion: esa
 /// ronda no incluye controles de reproduccion.
+///
+/// La eliminacion del dispositivo (solo `devices.manage`) vive al
+/// final del panel de informacion desplegable y comparte widgets con
+/// la eliminacion de medio.
 library;
 
 import 'dart:async';
@@ -28,6 +32,7 @@ import '../../models/media.dart';
 import '../../services/thumbnail_service.dart';
 import 'device_register_screen.dart';
 import '../../widgets/cauce_headers.dart';
+import '../../widgets/delete_section.dart';
 import '../../widgets/device_connection_status.dart';
 import '../../widgets/media_type_badge.dart';
 import '../../widgets/organic_background.dart';
@@ -126,8 +131,14 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                               const SizedBox(height: 16),
                               // Panel de informacion: desplegable
                               // plegado por defecto, debajo de las
-                              // acciones (es lo menos relevante).
-                              _TelemetryCard(device: current),
+                              // acciones (es lo menos relevante). Al
+                              // final del cuerpo desplegado vive la
+                              // seccion de eliminar.
+                              _TelemetryCard(
+                                device: current,
+                                canDelete: canManageDevices(context),
+                                onDelete: _confirmDelete,
+                              ),
                             ],
                           ),
                         ),
@@ -247,6 +258,47 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     } catch (_) {
       messenger.showSnackBar(
         const SnackBar(content: Text('No se pudo asignar el contenido.')),
+      );
+    }
+  }
+
+  /// Confirmacion y eliminacion del dispositivo. Comparte el dialogo
+  /// y la zona de riesgo de la eliminacion de medio (widgets en
+  /// delete_section.dart). Tras un 204 se sale del detalle: el
+  /// controlador ya recarg'o el inventario sin el dispositivo (el
+  /// backend borro tambien su historial y su asignacion vigente, en
+  /// cascada).
+  Future<void> _confirmDelete() async {
+    final device = _latestFrom(context.read<DevicesController>());
+    final confirmed = await showDeleteConfirmation(
+      context: context,
+      title: 'Eliminar dispositivo',
+      message: 'Se eliminara "${device.name}" del inventario de la sala '
+          'junto con su historial de cambios. Esta accion no se puede '
+          'deshacer.',
+    );
+    if (!confirmed || !mounted) return;
+
+    final controller = context.read<DevicesController>();
+    final ok = await controller.remove(device);
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (ok) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('"${device.name}" eliminado del inventario.'),
+          backgroundColor: CauceColors.teal,
+        ),
+      );
+      Navigator.of(context).pop();
+    } else {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            controller.errorMessage ?? 'El servidor rechazo la eliminacion.',
+          ),
+          backgroundColor: CauceColors.error,
+        ),
       );
     }
   }
@@ -819,11 +871,24 @@ class _MediaRow extends StatelessWidget {
 /// MAC, puerto, ultima conexion): desplegable PLEGADO por defecto y
 /// ubicado debajo de las acciones, porque es lo menos relevante de la
 /// vista. El boton de edicion vive en la cabecera, fuera del cuerpo
-/// plegable.
+/// plegable; al final del cuerpo desplegado vive la seccion de
+/// eliminacion, solo para quien tiene permiso de ejecutarla.
 class _TelemetryCard extends StatefulWidget {
-  const _TelemetryCard({required this.device});
+  const _TelemetryCard({
+    required this.device,
+    required this.canDelete,
+    required this.onDelete,
+  });
 
   final Device device;
+
+  /// `devices.manage`: la seccion de eliminar solo se pinta para
+  /// quien tiene el permiso; el 403 del servidor es la red de
+  /// seguridad.
+  final bool canDelete;
+
+  /// Dispara la confirmacion de eliminacion de la pantalla.
+  final VoidCallback onDelete;
 
   @override
   State<_TelemetryCard> createState() => _TelemetryCardState();
@@ -945,6 +1010,22 @@ class _TelemetryCardState extends State<_TelemetryCard> {
                                   ),
                                 ],
                               ),
+                            ),
+                          ],
+                          // Seccion de eliminacion al final del panel
+                          // desplegado: fuera de la vista inmediata y
+                          // tras confirmacion explicita.
+                          if (widget.canDelete) ...[
+                            const SizedBox(height: 16),
+                            DeleteSection(
+                              warning:
+                                  'Se eliminara "${device.name}" del '
+                                  'inventario de la sala junto con su '
+                                  'historial de cambios. Esta accion '
+                                  'no se puede deshacer.',
+                              buttonLabel:
+                                  'Eliminar Dispositivo del Inventario',
+                              onDelete: widget.onDelete,
                             ),
                           ],
                         ],

@@ -28,6 +28,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/cauce_colors.dart';
 import '../core/theme/cauce_theme.dart';
 import '../models/device.dart';
+import 'identity_widgets.dart';
 
 /// Representacion visual de un estado. Centraliza la traduccion
 /// estado real -> color + iconografia.
@@ -123,7 +124,7 @@ class DeviceConnectionStatus extends StatelessWidget {
       height: 1.2,
     );
     var labelWidth = 0.0;
-    for (final word in const ['Servidor', 'Activo', 'Inactivo', 'Comprobando']) {
+    for (final word in lanBadgeLabelWords) {
       final painter = TextPainter(
         text: TextSpan(text: word, style: labelStyle),
         textDirection: TextDirection.ltr,

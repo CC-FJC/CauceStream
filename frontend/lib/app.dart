@@ -18,6 +18,7 @@ import 'screens/media/media_register_screen.dart';
 import 'screens/devices/device_detail_screen.dart';
 import 'screens/devices/device_register_screen.dart';
 import 'screens/profile/profile_screen.dart';
+import 'screens/users/roles_screen.dart';
 import 'session/session_controller.dart';
 
 /// Rutas nombradas de la aplicacion.
@@ -29,6 +30,7 @@ abstract final class Routes {
   static const deviceRegister = '/devices/new';
   static const mediaDetail = '/media/detail';
   static const mediaRegister = '/media/new';
+  static const roles = '/users/roles';
 }
 
 /// Puerta de entrada: decide entre login y el area autenticada
@@ -96,6 +98,8 @@ class _SessionGateState extends State<SessionGate> {
         return _fade(MediaDetailScreen(media: settings.arguments as Media));
       case Routes.mediaRegister:
         return _fade(const MediaRegisterScreen());
+      case Routes.roles:
+        return _fade(const RolesScreen());
       default:
         return _fade(const MainShell());
     }

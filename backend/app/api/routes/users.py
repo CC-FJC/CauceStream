@@ -95,3 +95,21 @@ async def deactivate_user(
     service: UserService = Depends(get_user_service),
 ) -> User:
     return await service.set_active(actor, user_id, active=False)
+
+
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a user (physical)",
+)
+async def delete_user(
+    user_id: int,
+    actor: User = Depends(get_current_user),
+    service: UserService = Depends(get_user_service),
+) -> None:
+    """Physically remove a user row. Requires the management
+    permission of the target role and never self-deletes. The room
+    app intentionally uses the logical removal
+    (POST /{user_id}/deactivate); this endpoint serves real cleanups
+    through the API."""
+    await service.delete_user(actor, user_id)

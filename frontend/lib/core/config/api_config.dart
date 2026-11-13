@@ -67,6 +67,8 @@ class ApiConfig {
   static const String healthPath = '/health';
   static const String loginPath = '/auth/login';
   static const String usersPath = '/users';
+  static const String rolesPath = '/roles';
+  static const String permissionsPath = '/permissions';
   static const String devicesPath = '/devices';
   static const String assignmentsPath = '/assignments';
   static const String mediaPath = '/media';

@@ -6,6 +6,7 @@ import 'controllers/connectivity_controller.dart';
 import 'controllers/devices_controller.dart';
 import 'controllers/media_library_controller.dart';
 import 'controllers/room_controller.dart';
+import 'controllers/users_controller.dart';
 import 'core/config/api_config.dart';
 import 'core/network/api_client.dart';
 import 'core/theme/cauce_theme.dart';
@@ -14,6 +15,7 @@ import 'services/auth_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/device_service.dart';
 import 'services/media_service.dart';
+import 'services/role_service.dart';
 import 'services/room_service.dart';
 import 'services/thumbnail_service.dart';
 import 'services/user_service.dart';
@@ -44,6 +46,12 @@ void main() {
   // (backend/docs/room_power_temporal.md), aislado de DeviceService.
   final room = RoomController(service: RoomService(client: apiClient));
 
+  // Administracion de personal (pestana Usuarios): usuarios y roles.
+  final users = UsersController(
+    service: UserService(client: apiClient),
+    roleService: RoleService(client: apiClient),
+  );
+
   // Indicador LAN: sondeo del endpoint de salud del servidor activo
   // (local o Tailscale, segun ApiConfig).
   final connectivity = ConnectivityController(service: ConnectivityService());
@@ -56,6 +64,7 @@ void main() {
         ChangeNotifierProvider.value(value: mediaLibrary),
         ChangeNotifierProvider.value(value: connectivity),
         ChangeNotifierProvider.value(value: room),
+        ChangeNotifierProvider.value(value: users),
       ],
       child: const CauceApp(),
     ),

@@ -4,8 +4,10 @@
 /// - GET  /api/devices                  (permiso `devices.view`)
 /// - GET  /api/devices/{uid}            (permiso `devices.view`)
 /// - POST /api/devices                  (permiso `devices.manage`)
-/// - POST /api/devices/autoconfig       (permiso `devices.manage`)
+/// - PATCH /api/devices/{uid}           (permiso `devices.manage`)
+/// - POST  /api/devices/autoconfig       (permiso `devices.manage`)
 /// - GET  /api/devices/autoconfig/pending (permiso `devices.manage`)
+/// - DELETE /api/devices/{uid}            204      (permiso `devices.manage`)
 /// - POST /api/devices/{uid}/power       (permiso `devices.control`)
 library;
 
@@ -114,6 +116,16 @@ class DeviceService {
       body: body,
     );
     return Device.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Elimina un dispositivo del inventario (DELETE, 204). El backend
+  /// borra en cascada su historial de cambios y su asignacion
+  /// vigente; un heartbeat posterior del mismo uid se comporta como
+  /// un dispositivo desconocido. Requiere permiso `devices.manage`.
+  Future<void> deleteDevice(String deviceUid) async {
+    await _client.delete(
+      '${ApiConfig.devicesPath}/${Uri.encodeComponent(deviceUid)}',
+    );
   }
 
   /// Envia un comando de energia al dispositivo.
