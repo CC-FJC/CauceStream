@@ -8,6 +8,7 @@ import 'package:web_socket_channel/io.dart';
 
 import '../models/playback_message.dart';
 import 'cauce_media_downloader.dart';
+import 'device_authorization.dart';
 import 'playback_state.dart';
 import 'power_executor.dart';
 
@@ -88,12 +89,22 @@ class RevisionGate {
 /// - El WS caído no afecta al reproductor: el contenido actual sigue.
 /// - `playbackState.setPlaying` SOLO cuando el applier confirma que el
 ///   medio está en pantalla; un ACK jamás sincroniza nada.
+///
+/// Autorización de conexión: con [authorization] inyectada (la
+/// producción siempre lo hace), el canal solo se abre cuando el
+/// heartbeat confirmó el registro (`registered`). Cualquier otra
+/// transición del estado de autorización cierra el canal activo y
+/// deja inertes los reintentos pendientes hasta que un heartbeat
+/// vuelva a confirmar el registro. El rechazo del handshake se
+/// loguea con su motivo (p. ej. close 1008) y la recuperación
+/// depende siempre del veredicto del heartbeat, no del propio fallo.
 class PlaybackSocketService {
   PlaybackSocketService({
     required this.baseUrl,
     required this.deviceUid,
     required this.playbackState,
     this.deviceKey,
+    this.authorization,
     this.cacheDir,
     CauceMediaDownloader? downloader,
     CauceSocketConnector? connector,
@@ -109,7 +120,9 @@ class PlaybackSocketService {
   })  : _downloader = downloader ?? CauceMediaDownloader(deviceKey: deviceKey),
         _connector = connector ?? connectDefault,
         _powerExecutor = powerExecutor ?? const MethodChannelPowerExecutor(),
-        _wait = wait ?? defaultWait;
+        _wait = wait ?? defaultWait {
+    authorization?.addListener(_onAuthorizationChanged);
+  }
 
   /// URL base del servidor HTTP (p. ej. http://10.15.1.150:8000). El
   /// esquema se convierte a ws:// (o wss:// para https).
@@ -126,6 +139,12 @@ class PlaybackSocketService {
   /// Estado compartido con el heartbeat: el medio confirmado en
   /// pantalla.
   final PlaybackState playbackState;
+
+  /// Coordinación heartbeat → WS (null SOLO en pruebas heredadas sin
+  /// coordinación): el canal se abre únicamente con el registro
+  /// confirmado y se revoca ante cualquier otra transición. La
+  /// producción siempre lo inyecta (ver [DeviceAuthorization]).
+  final DeviceAuthorization? authorization;
 
   /// Directorio de caché de medios (path_provider en producción).
   final Future<Directory> Function()? cacheDir;
@@ -162,6 +181,11 @@ class PlaybackSocketService {
 
   int? get lastAcceptedRevision => _gate.lastAccepted;
 
+  /// ¿El heartbeat confirmó el registro? Sin coordinación inyectada se
+  /// asume autorizado (pruebas heredadas): la producción siempre
+  /// coordina.
+  bool get _authorized => authorization?.isAuthorized ?? true;
+
   /// URI del WS del contrato: `ws://host/api/devices/<uid-encoded>/ws`.
   static Uri wsUri(String baseUrl, String deviceUid) {
     final base = Uri.parse(baseUrl);
@@ -174,15 +198,26 @@ class PlaybackSocketService {
   }
 
   /// Conector de producción: IOWebSocketChannel con el header del
-  /// dispositivo. `ready` lanza si el handshake es rechazado (p. ej.
-  /// close 1008 "Invalid device key"), lo que se traduce en
-  /// reconexión silenciosa.
+  /// dispositivo. `ready` lanza si el handshake es rechazado; el
+  /// motivo (close code y reason, p. ej. 1008 "Device not
+  /// registered" o "Invalid device key") queda registrado en el log
+  /// para que un rechazo de política sea auditable y jamás se
+  /// confunda con un fallo transitorio de red.
   static Future<CauceSocket> connectDefault(
     Uri uri,
     Map<String, String> headers,
   ) async {
     final channel = IOWebSocketChannel.connect(uri, headers: headers);
-    await channel.ready;
+    try {
+      await channel.ready;
+    } catch (e) {
+      debugPrint(
+        '[CAUCE] WS playback handshake rechazado: $e '
+        '(close=${channel.closeCode ?? '?'} '
+        'reason=${channel.closeReason ?? '?'})',
+      );
+      rethrow;
+    }
     return _IOWebSocketAdapter(channel);
   }
 
@@ -190,13 +225,16 @@ class PlaybackSocketService {
   static Future<void> defaultWait(Duration delay) =>
       Future<void>.delayed(delay);
 
-  /// Arranca el ciclo de conexión. Idempotente.
+  /// Arranca el ciclo de conexión. Idempotente. Sin registro
+  /// confirmado por el heartbeat NO abre conexión: la transición a
+  /// `registered` (que puede llegar después) es lo que abre el canal.
   void start() {
     if (_disposed || _started) return;
     _started = true;
     debugPrint(
       '[CAUCE] Servicio playback WS iniciado '
-      '(uri=${wsUri(baseUrl, deviceUid)}, device_uid="$deviceUid")',
+      '(uri=${wsUri(baseUrl, deviceUid)}, device_uid="$deviceUid", '
+      '${_authorized ? 'registro confirmado: abriendo canal' : 'esperando veredicto del heartbeat'})',
     );
     unawaited(_connect());
   }
@@ -216,6 +254,7 @@ class PlaybackSocketService {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    authorization?.removeListener(_onAuthorizationChanged);
     _generation++;
     _subscription?.cancel();
     _subscription = null;
@@ -224,10 +263,56 @@ class PlaybackSocketService {
     _downloader.dispose();
   }
 
+  // --- Puerta de autorización (veredictos del heartbeat) ---
+
+  /// Reacciona a las transiciones del estado de autorización:
+  /// `registered` abre el canal (si el servicio está en marcha);
+  /// cualquier otro estado lo cierra y deja inertes los reintentos.
+  void _onAuthorizationChanged(DeviceAuthorizationStatus status) {
+    if (_disposed) return;
+    if (status == DeviceAuthorizationStatus.registered) {
+      if (_started && _socket == null && !_connecting) {
+        debugPrint(
+          '[CAUCE] WS playback: registro confirmado por heartbeat; '
+          'abriendo canal',
+        );
+        unawaited(_connect());
+      }
+      return;
+    }
+    // Revocación: canal cerrado, eventos en vuelo invalidados (la
+    // generación salta) y los reintentos programados quedan inertes
+    // (el gate de _connect los corta).
+    if (_socket != null || _connecting) {
+      debugPrint(
+        '[CAUCE] WS playback: autorización revocada por heartbeat '
+        '($status); canal cerrado y reintentos cancelados',
+      );
+      _dropConnection();
+    }
+  }
+
+  /// Cierre interno por revocación de autorización. Difiere de
+  /// [_onDisconnected]: jamás agenda reconexión.
+  void _dropConnection() {
+    _generation++;
+    _subscription?.cancel();
+    _subscription = null;
+    _connecting = false;
+    final socket = _socket;
+    _socket = null;
+    unawaited(socket?.close());
+  }
+
   // --- Ciclo de conexión ---
 
   Future<void> _connect() async {
     if (_disposed || _connecting || _socket != null) return;
+    if (!_authorized) {
+      // El heartbeat no confirmó el registro (o lo revocó): no hay
+      // nada que intentar hasta un veredicto `registered`.
+      return;
+    }
     _connecting = true;
     final generation = _generation;
     connectAttempts++;
@@ -261,7 +346,12 @@ class PlaybackSocketService {
       debugPrint('[CAUCE] WS playback no pudo conectar: $e');
       _scheduleReconnect();
     } finally {
-      _connecting = false;
+      // Solo el intento vigente libera el flag: un intento invalidado
+      // por una revocación (o un dispose) no puede ceder el turno que
+      // ya tomó su reemplazo.
+      if (generation == _generation) {
+        _connecting = false;
+      }
     }
   }
 
@@ -289,7 +379,10 @@ class PlaybackSocketService {
     }
     unawaited(
       _wait(delay).then((_) {
-        if (!_disposed && _socket == null) _connect();
+        // Cada reintento vuelve a comprobar la autorización: una
+        // revocación (o la falta de veredicto) corta el ciclo en
+        // seco, sin martillear al servidor.
+        if (!_disposed && _socket == null && _authorized) _connect();
       }),
     );
   }

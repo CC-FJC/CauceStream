@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:cauce_stream/models/playback_message.dart';
 import 'package:cauce_stream/services/cauce_media_downloader.dart';
+import 'package:cauce_stream/services/device_authorization.dart';
 import 'package:cauce_stream/services/playback_socket_service.dart';
 import 'package:cauce_stream/services/playback_state.dart';
 import 'package:cauce_stream/services/power_executor.dart';
@@ -739,6 +740,185 @@ void main() {
       ));
       await pumpEventQueue();
       expect(playbackState.currentMediaId, 5);
+    });
+  });
+
+  group('coordinación con la autorización del heartbeat', () {
+    /// Servicio aislado con su propio conector y estado de autorización;
+    /// la producción lo cablea igual (main.dart), solo que allí el
+    /// veredicto lo escribe el heartbeat real.
+    PlaybackSocketService gatedService({
+      required DeviceAuthorization authorization,
+      required FakeConnector connector,
+      Future<void> Function(Duration delay)? wait,
+    }) {
+      final gated = PlaybackSocketService(
+        baseUrl: 'http://10.15.1.150:8000',
+        deviceUid: 'SALA 1',
+        deviceKey: 'secreto-compartido',
+        playbackState: playbackState,
+        authorization: authorization,
+        downloader: downloader,
+        connector: connector.connector,
+        powerExecutor: powerExecutor,
+        cacheDir: () async => tempDir,
+        wait: wait ?? ((delay) async {}),
+      )..start();
+      addTearDown(gated.dispose);
+      return gated;
+    }
+
+    test('sin veredicto (unknown) start() no conecta ni reintenta',
+        () async {
+      final connector = FakeConnector();
+      final gated = gatedService(
+        authorization: DeviceAuthorization(),
+        connector: connector,
+      );
+      await pumpEventQueue();
+
+      expect(gated.isConnected, isFalse);
+      expect(connector.calls, 0,
+          reason: 'sin confirmación de registro no hay intento alguno');
+    });
+
+    test('202 (pending) mantiene el canal cerrado; la transición a '
+        'registered lo abre sin reiniciar la app', () async {
+      final connector = FakeConnector();
+      final authorization = DeviceAuthorization();
+      authorization.update(DeviceAuthorizationStatus.pending);
+      final gated = gatedService(
+        authorization: authorization,
+        connector: connector,
+      );
+      await pumpEventQueue();
+      expect(connector.calls, 0, reason: 'un pendiente no abre canal');
+
+      // El administrador registró el equipo: el siguiente veredicto
+      // del heartbeat (registered) abre el canal.
+      authorization.update(DeviceAuthorizationStatus.registered);
+      await pumpEventQueue();
+
+      expect(gated.isConnected, isTrue);
+      expect(connector.calls, 1);
+    });
+
+    test('de registered a unknown (404): cierra el socket, cancela los '
+        'reintentos y permite reabrir', () async {
+      final connector = FakeConnector();
+      final authorization = DeviceAuthorization();
+      authorization.update(DeviceAuthorizationStatus.registered);
+      gatedService(
+        authorization: authorization,
+        connector: connector,
+      );
+      await pumpEventQueue();
+      expect(connector.calls, 1);
+
+      // Caída del servidor CON registro vigente: la reconexión
+      // existente se conserva (backoff inmediato en la prueba).
+      connector.sockets.last.serverDone();
+      await pumpEventQueue();
+      expect(connector.calls, 2, reason: 'registrado: reconexión intacta');
+
+      // El heartbeat reporta la eliminación (404 → unknown): canal
+      // cerrado y ciclo de reconexión revocado.
+      authorization.update(DeviceAuthorizationStatus.unknown);
+      await pumpEventQueue();
+      final revoked = connector.sockets.last;
+      expect(revoked.closed, isTrue);
+      await pumpEventQueue();
+      expect(connector.calls, 2,
+          reason: 'sin autorización no hay ningún reintento');
+
+      // Recuperada la autorización (re-registro del dispositivo), el
+      // canal se abre de nuevo.
+      authorization.update(DeviceAuthorizationStatus.registered);
+      await pumpEventQueue();
+      expect(connector.calls, 3);
+    });
+
+    test('rechazo de política del handshake: el reintento pende solo del '
+        'nuevo veredicto, no del fallo', () async {
+      final connector = FakeConnector()
+        ..failures.add(const SocketException('handshake: 1008 Device not '
+            'registered'));
+      final authorization = DeviceAuthorization();
+      authorization.update(DeviceAuthorizationStatus.registered);
+
+      // Reconexión bajo control de la prueba: el reintento no dispara
+      // hasta que se complete.
+      final pendingRetry = Completer<void>();
+      final gated = gatedService(
+        authorization: authorization,
+        connector: connector,
+        wait: (delay) => pendingRetry.future,
+      );
+      await pumpEventQueue();
+      expect(connector.calls, 1,
+          reason: 'con veredicto registered se intentó una vez');
+      expect(gated.isConnected, isFalse);
+
+      // El heartbeat informa la eliminación ANTES de que el reintento
+      // programado dispare: queda cancelado por la revocación.
+      authorization.update(DeviceAuthorizationStatus.unknown);
+      pendingRetry.complete();
+      await pumpEventQueue();
+      expect(connector.calls, 1,
+          reason: 'el reintento pendiente fue cancelado');
+
+      // Un nuevo veredicto registered (re-registro) sí reintenta.
+      authorization.update(DeviceAuthorizationStatus.registered);
+      await pumpEventQueue();
+      expect(connector.calls, 2);
+      expect(gated.isConnected, isTrue);
+    });
+
+    test('transiciones rápidas: jamás hay intentos concurrentes ni sockets '
+        'viejos registrados', () async {
+      final authorization = DeviceAuthorization();
+      authorization.update(DeviceAuthorizationStatus.registered);
+
+      final attempts = <int>[];
+      final handshakes = <Completer<CauceSocket>>[];
+      final gated = PlaybackSocketService(
+        baseUrl: 'http://10.15.1.150:8000',
+        deviceUid: 'SALA 1',
+        playbackState: playbackState,
+        authorization: authorization,
+        downloader: downloader,
+        powerExecutor: powerExecutor,
+        cacheDir: () async => tempDir,
+        wait: (delay) async {},
+        connector: (uri, headers) {
+          attempts.add(attempts.length + 1);
+          final handshake = Completer<CauceSocket>();
+          handshakes.add(handshake);
+          return handshake.future;
+        },
+      )..start();
+      addTearDown(gated.dispose);
+      await pumpEventQueue();
+
+      // Un único intento en vuelo pese al handshake colgado.
+      expect(attempts, [1]);
+
+      // Revocación y reautorización mientras el intento 1 está en el
+      // aire: el viejo queda invalidado y el nuevo es el único.
+      authorization.update(DeviceAuthorizationStatus.unknown);
+      authorization.update(DeviceAuthorizationStatus.registered);
+      await pumpEventQueue();
+      expect(attempts, [1, 2]);
+
+      handshakes[0].complete(FakeSocket());
+      await pumpEventQueue();
+      expect(gated.isConnected, isFalse,
+          reason: 'el intento invalidado jamás se registra');
+
+      handshakes[1].complete(FakeSocket());
+      await pumpEventQueue();
+      expect(gated.isConnected, isTrue);
+      expect(attempts, [1, 2], reason: 'sin intentos extra');
     });
   });
 }

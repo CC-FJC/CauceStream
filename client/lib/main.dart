@@ -6,6 +6,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'config/constants.dart';
 import 'screens/auto_playback_screen.dart';
 import 'services/cauce_heartbeat_service.dart';
+import 'services/device_authorization.dart';
 import 'services/device_identity.dart';
 import 'services/playback_socket_service.dart';
 import 'services/playback_state.dart';
@@ -28,6 +29,26 @@ void main() async {
 /// playback (asignación vigente). Ambos comparten el [PlaybackState]
 /// del medio confirmado en pantalla. Son globales a la app: viven
 /// mientras esté abierta, sin importar la navegación.
+///
+/// Secuencia coordinada por [DeviceAuthorization] (el heartbeat es la
+/// única vía de validación; no existe endpoint de consulta de
+/// registro):
+/// 1. Configuración (.env) e identidad (`device_uid`).
+/// 2. [PlaybackState] + estado de autorización (nace `unknown`).
+/// 3. [CauceHeartbeatService.start]: el primer heartbeat viaja de
+///    inmediato.
+/// 4. Se espera su veredicto ([CauceHeartbeatService.firstHeartbeat]):
+///    solo una respuesta 200 marca `registered`. 202 (pendiente de
+///    registro), 404 (desconocido), 401/422 (configuración inválida)
+///    o un servidor inalcanzable dejan el canal WS deshabilitado.
+/// 5. [PlaybackSocketService] arranca con esa puerta: sin
+///    `registered` no abre conexión y queda a la escucha de
+///    transiciones; el heartbeat sigue latiendo y detectará el
+///    registro (o la eliminación) del dispositivo más adelante.
+///
+/// La pantalla funciona igual con o sin registro: sin canal, el
+/// contenido persistido llegará en cuanto el registro se confirme;
+/// el corazón de la app nunca depende del WebSocket.
 Future<PlaybackSocketService?> _startDeviceServices() async {
   final deviceUid = await DeviceIdentity.resolve();
   debugPrint('[CAUCE] device_uid resuelto: "$deviceUid"');
@@ -51,25 +72,37 @@ Future<PlaybackSocketService?> _startDeviceServices() async {
   final deviceKey = AppConfig.deviceSecret;
   final playbackState = PlaybackState();
 
+  // Estado de autorización compartido: el heartbeat escribe los
+  // veredictos del servidor y el canal WS los lee como puerta.
+  final authorization = DeviceAuthorization();
+
   // Diagnóstico de energía al arranque (NO bloqueante: un canal lento o
   // ausente jamás debe retrasar el heartbeat ni el WebSocket).
   final powerExecutor = const MethodChannelPowerExecutor();
   unawaited(_logPowerCapabilities(powerExecutor));
 
   // El heartbeat NO lo sustituye el WS: sigue reportando conectividad
-  // y el medio realmente en reproducción.
-  CauceHeartbeatService(
+  // y el medio realmente en reproducción. Su primer latido es
+  // inmediato y su veredicto (el que sea) es lo único que puede
+  // autorizar el canal WS.
+  final heartbeat = CauceHeartbeatService(
     baseUrl: serverUrl,
     deviceUid: deviceUid,
     deviceKey: deviceKey,
     playbackState: playbackState,
-  ).start();
+    authorization: authorization,
+  )..start();
+  await heartbeat.firstHeartbeat;
+  debugPrint(
+    '[CAUCE] Veredicto del primer heartbeat: ${authorization.status.name}',
+  );
 
   final playbackService = PlaybackSocketService(
     baseUrl: serverUrl,
     deviceUid: deviceUid,
     deviceKey: deviceKey,
     playbackState: playbackState,
+    authorization: authorization,
     powerExecutor: powerExecutor,
   )..start();
   return playbackService;

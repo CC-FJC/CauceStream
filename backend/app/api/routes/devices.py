@@ -97,8 +97,12 @@ async def register_device(
     actor: User = Depends(require_permission("devices.manage")),
     service: DeviceService = Depends(get_device_service),
 ):
-    """Register a device. It starts offline until its first heartbeat."""
-    return await service.register(payload)
+    """Register a device. It starts offline until its first heartbeat.
+    A previously deleted uid becomes connectable again: the WS
+    channel revocation that DELETE installed is lifted here."""
+    device = await service.register(payload)
+    connection_manager.allow(payload.device_uid)
+    return device
 
 
 @router.get(
@@ -139,8 +143,14 @@ async def delete_device(
     """Delete a registered device and its whole change history. Pure
     deregistration: it is never re-created automatically; a later
     heartbeat of its uid behaves as an unknown device (404, or a new
-    discovery if the autoconfig mode is enabled)."""
+    discovery if the autoconfig mode is enabled). The live WS channel
+    is revoked as well (closed with the policy code, wiped from the
+    manager and refused until the uid is registered again): a deleted
+    device can never keep reporting `ws_connected` nor keep receiving
+    playback or power commands, and a handshake racing with this
+    deletion is refused instead of accepted."""
     await service.delete_device(device_uid)
+    await connection_manager.revoke(device_uid)
 
 
 @router.patch(
@@ -398,7 +408,11 @@ async def device_playback_socket(websocket: WebSocket, device_uid: str) -> None:
         return
     sync_message = build_sync_message(device_uid, row)
 
-    await connection_manager.connect(device_uid, websocket)
+    # A DELETE racing with this handshake is caught here: the manager
+    # refuses revoked uids (closing the socket with the policy code)
+    # instead of registering the channel of an already-deleted device.
+    if not await connection_manager.connect(device_uid, websocket):
+        return
     try:
         await websocket.accept()
         await websocket.send_text(json.dumps(sync_message))

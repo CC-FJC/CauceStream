@@ -79,13 +79,29 @@ class DeviceConnectionManager:
         # sent (same validation and newest-wins semantics as playback).
         self._power_seq: dict[str, int] = {}
         self._last_power_command: dict[str, dict] = {}
+        # Uids revoked by DELETE and not yet registered again: their
+        # connections are closed and refused (race guard between the
+        # WS handshake and a concurrent deletion).
+        self._revoked: set[str] = set()
 
     # --- Connection lifecycle ---
 
     async def connect(self, device_uid: str, websocket: WebSocket) -> bool:
         """Register a connection, replacing any previous one for the same
-        device (the newest connection wins). Returns True when an older
-        connection was replaced."""
+        device (the newest connection wins). Returns True when the
+        connection was ACCEPTED, False when the device is currently
+        revoked (deleted): the websocket is then closed with the policy
+        code and never entered into the inventory, closing the race of
+        a handshake that validated the device just before its DELETE
+        committed."""
+        if device_uid in self._revoked:
+            try:
+                await websocket.close(
+                    code=WSC_POLICY_VIOLATION, reason="Device not registered"
+                )
+            except Exception:
+                logger.debug("Revoked device %s socket was already gone", device_uid)
+            return False
         old = self._connections.get(device_uid)
         self._connections[device_uid] = websocket
         # A fresh connection implies a fresh `playback.sync` with the
@@ -98,7 +114,7 @@ class DeviceConnectionManager:
             except Exception:
                 logger.debug("Old socket for %s was already gone", device_uid)
             return True
-        return False
+        return True
 
     def disconnect(self, device_uid: str, websocket: WebSocket) -> None:
         """Drop the connection only if it is still the current one for the
@@ -116,6 +132,38 @@ class DeviceConnectionManager:
     @property
     def connection_count(self) -> int:
         return len(self._connections)
+
+    async def revoke(self, device_uid: str) -> bool:
+        """DELETE-time channel revocation: close the device's live
+        connection (if any), forget ALL its protocol state and refuse
+        any further connect of this uid until it is registered again
+        (see allow). In-memory only, like the connections themselves.
+        The refusal closes the race of a handshake still validating the
+        device while its DELETE commits: whichever runs last, the uid
+        never keeps a live or accepted socket.
+
+        Returns True when a live connection was closed."""
+        was_connected = device_uid in self._connections
+        websocket = self._connections.pop(device_uid, None)
+        self._clear_pending_ack(device_uid)
+        self._last_command.pop(device_uid, None)
+        self._power_seq.pop(device_uid, None)
+        self._last_power_command.pop(device_uid, None)
+        self._revoked.add(device_uid)
+        if websocket is not None:
+            try:
+                await websocket.close(
+                    code=WSC_POLICY_VIOLATION, reason="Device not registered"
+                )
+            except Exception:
+                logger.debug("Revoked socket for %s was already gone", device_uid)
+        return was_connected
+
+    def allow(self, device_uid: str) -> None:
+        """Lift a previous revocation: called when the uid is
+        registered again (a deleted device that is re-registered by an
+        administrator), so its connections are accepted anew."""
+        self._revoked.discard(device_uid)
 
     # --- Notifications ---
 
@@ -270,6 +318,7 @@ class DeviceConnectionManager:
         self._last_command.clear()
         self._power_seq.clear()
         self._last_power_command.clear()
+        self._revoked.clear()
 
 
 # Application-level singleton shared by the WS endpoint and the

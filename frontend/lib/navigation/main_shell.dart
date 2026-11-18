@@ -1,8 +1,14 @@
-/// Shell principal con la barra de navegacion inferior de 5 entradas
-/// (Inicio, Dispositivos, Biblioteca, Actividad, Usuarios), tal como
-/// aparece en las referencias de Stitch. "Usuarios" es la pestana de
-/// administracion de personal (la referencia "Mas" fue reemplazada);
-/// el perfil sigue alcanzable desde el avatar del encabezado.
+/// Shell principal con la barra de navegacion inferior. Dos modos
+/// segun la sesion:
+/// - Administrador (permiso de gestion de personal): barra de las 5
+///   pestanas (Inicio, Dispositivos, Biblioteca, Actividad,
+///   Usuarios) SOLO con iconos y su tooltip: con textos, cinco
+///   elementos desbordan el ancho de la pantallas angostas.
+/// - Mediador: 4 pestanas (sin "Usuarios") con sus textos: sobra
+///   sitio para las etiquetas.
+/// "Usuarios" es la pestana de administracion de personal (la
+/// referencia "Mas" fue reemplazada); el perfil sigue alcanzable
+/// desde el avatar del encabezado.
 library;
 
 import 'dart:async';
@@ -12,6 +18,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../controllers/devices_controller.dart';
+import '../core/capabilities.dart';
 import '../core/theme/cauce_colors.dart';
 import '../core/theme/cauce_theme.dart';
 import '../screens/activities/activities_screen.dart';
@@ -38,12 +45,16 @@ class _MainShellState extends State<MainShell> {
 
   late final DevicesController _devices;
 
-  late final List<Widget> _screens = <Widget>[
-    const HomeScreen(),
-    const DevicesScreen(),
-    const MediaLibraryScreen(),
-    const ActivitiesScreen(),
-    const UsersScreen(),
+  /// Pestanas del shell en orden fijo (el orden es el indice de la
+  /// barra). "Usuarios" (gestion de personal) es la unica dependiente
+  /// de permiso: [canManageUsers] decide en el build si forma parte
+  /// del arbol, asi que la sesion carga tarde no le afecta.
+  static const _destinations = <_Destination>[
+    _Destination(Icons.home, 'Inicio', HomeScreen()),
+    _Destination(Icons.devices, 'Dispositivos', DevicesScreen()),
+    _Destination(Icons.video_library, 'Biblioteca', MediaLibraryScreen()),
+    _Destination(Icons.hub, 'Actividad', ActivitiesScreen()),
+    _Destination(Icons.group, 'Usuarios', UsersScreen()),
   ];
 
   @override
@@ -89,6 +100,20 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
+    // La quinta pestana existe solo con permiso de gestion de
+    // personal. Con cinco elementos la barra prescinde de los textos
+    // (solo iconos con tooltip); las cuatro del mediador conservan
+    // sus etiquetas sin riesgo de desborde.
+    final manageUsers = canManageUsers(context);
+    final destinations = manageUsers
+        ? _destinations
+        : _destinations.sublist(0, _destinations.length - 1);
+    // Defensivo ante un cambio de rol con una pestana del admin aun
+    // seleccionada: el indice mostrado nunca sale de rango.
+    final index = _currentIndex < destinations.length
+        ? _currentIndex
+        : destinations.length - 1;
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -105,7 +130,10 @@ class _MainShellState extends State<MainShell> {
             // telefono: los encabezados reservan ese inset por si
             // mismos.
             Expanded(
-              child: IndexedStack(index: _currentIndex, children: _screens),
+              child: IndexedStack(
+                index: index,
+                children: [for (final d in destinations) d.screen],
+              ),
             ),
             // SafeArea inferior: la barra de navegacion queda por
             // encima de la barra de gestos del sistema (el espacio
@@ -113,7 +141,9 @@ class _MainShellState extends State<MainShell> {
             SafeArea(
               top: false,
               child: _CauceNavBar(
-                currentIndex: _currentIndex,
+                destinations: destinations,
+                showLabels: !manageUsers,
+                currentIndex: index,
                 onTap: _onTap,
               ),
             ),
@@ -124,19 +154,33 @@ class _MainShellState extends State<MainShell> {
   }
 }
 
+/// Pestana del shell: icono, etiqueta y pantalla; el orden de la
+/// lista es su indice en la barra.
+class _Destination {
+  const _Destination(this.icon, this.label, this.screen);
+
+  final IconData icon;
+  final String label;
+  final Widget screen;
+}
+
 class _CauceNavBar extends StatelessWidget {
-  const _CauceNavBar({required this.currentIndex, required this.onTap});
+  const _CauceNavBar({
+    required this.destinations,
+    required this.showLabels,
+    required this.currentIndex,
+    required this.onTap,
+  });
+
+  /// Pestanas visibles para la sesion: 5 (admin, solo iconos) o 4
+  /// (mediador, con texto).
+  final List<_Destination> destinations;
+
+  /// false en el modo de 5: la barra muestra solo iconos con tooltip.
+  final bool showLabels;
 
   final int currentIndex;
   final ValueChanged<int> onTap;
-
-  static const _items = [
-    (Icons.home, 'Inicio'),
-    (Icons.devices, 'Dispositivos'),
-    (Icons.video_library, 'Biblioteca'),
-    (Icons.hub, 'Actividad'),
-    (Icons.group, 'Usuarios'),
-  ];
 
   @override
   Widget build(BuildContext context) {
@@ -158,11 +202,12 @@ class _CauceNavBar extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              for (var i = 0; i < _items.length; i++)
+              for (var i = 0; i < destinations.length; i++)
                 _NavItem(
-                  icon: _items[i].$1,
-                  label: _items[i].$2,
+                  icon: destinations[i].icon,
+                  label: destinations[i].label,
                   selected: i == currentIndex,
+                  showLabel: showLabels,
                   onTap: () => onTap(i),
                 ),
             ],
@@ -178,12 +223,18 @@ class _NavItem extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.selected,
+    this.showLabel = true,
     required this.onTap,
   });
 
   final IconData icon;
   final String label;
   final bool selected;
+
+  /// Modo solo iconos (barra de admin, 5 pestanas): sin texto, con
+  /// tooltip y con un area tactil mas amplia para conservar la
+  /// comodidad de toque que perdia con las etiquetas.
+  final bool showLabel;
   final VoidCallback onTap;
 
   @override
@@ -193,12 +244,14 @@ class _NavItem extends StatelessWidget {
         ? Colors.white
         : CauceColors.peachOnSurfaceVariant.withValues(alpha: 0.8);
 
-    return InkWell(
+    Widget pill = InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(999),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: showLabel
+            ? const EdgeInsets.symmetric(horizontal: 10, vertical: 6)
+            : const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(999),
@@ -212,23 +265,28 @@ class _NavItem extends StatelessWidget {
                 ]
               : null,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 22, color: fg),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                fontFamily: CauceTheme.displayFont,
-                fontSize: 11,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: fg,
-              ),
-            ),
-          ],
-        ),
+        child: showLabel
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 22, color: fg),
+                  const SizedBox(height: 2),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontFamily: CauceTheme.displayFont,
+                      fontSize: 11,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                      color: fg,
+                    ),
+                  ),
+                ],
+              )
+            : Icon(icon, size: 22, color: fg),
       ),
     );
+    // Sin etiqueta, el nombre de la pestana viaja en el tooltip: los
+    // cinco iconos siguen identificandose en el modo admin.
+    return showLabel ? pill : Tooltip(message: label, child: pill);
   }
 }

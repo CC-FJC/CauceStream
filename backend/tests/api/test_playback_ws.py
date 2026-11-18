@@ -207,6 +207,95 @@ async def test_duplicate_connection_is_replaced(
     assert not connection_manager.has(UID)
 
 
+# --- Deletion revokes the live channel ---
+
+
+async def test_delete_device_revokes_live_socket(
+    client, admin, db_session, monkeypatch, ws_sessionmaker
+):
+    """DELETE closes the device's live channel (1008, not registered)
+    and wipes every trace from the manager - including a command in
+    flight and its ACK watchdog: the device can never keep reporting
+    ws_connected nor receive further commands."""
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+    media_id = await create_media(db_session)
+
+    ws, task = await open_socket(monkeypatch, ws_sessionmaker)
+    await ws.wait_for(1)
+    # A delivered command leaves its ACK watchdog armed.
+    response = await client.put(
+        f"/api/devices/{UID}/assignment",
+        json={"media_id": media_id},
+        headers=bearer(token),
+    )
+    assert response.status_code == 200
+    assert response.json()["delivered"] is True
+    await ws.wait_for(2)
+    assert UID in connection_manager._last_command
+
+    response = await client.delete(f"/api/devices/{UID}", headers=bearer(token))
+    assert response.status_code == 204
+
+    assert ws.closed == (WSC_POLICY_VIOLATION, "Device not registered")
+    assert not connection_manager.has(UID)
+    assert UID not in connection_manager._last_command
+    assert UID not in connection_manager._pending_acks
+    # No channel survives the revocation, so nothing can be delivered.
+    assert (
+        await connection_manager.send_command(
+            UID, {"type": "playback.command", "assignment": {"revision": 1}}
+        )
+        is False
+    )
+
+    ws.client_disconnect()
+    await task
+
+
+async def test_revoked_uid_refuses_connect_and_register_allows_again(
+    client, admin, monkeypatch, ws_sessionmaker
+):
+    """Race guard: a connect after the revocation is refused (closed
+    1008, never inventoried) until the uid is registered again; the
+    post-deletion handshake is rejected by the DB check itself."""
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+
+    ws, task = await open_socket(monkeypatch, ws_sessionmaker)
+    await ws.wait_for(1)
+
+    await client.delete(f"/api/devices/{UID}", headers=bearer(token))
+    assert ws.closed == (WSC_POLICY_VIOLATION, "Device not registered")
+    ws.client_disconnect()
+    await task
+
+    # Post-deletion handshake: the device row is gone, so the DB check
+    # itself rejects it before accept().
+    ghost, ghost_task = await open_socket(monkeypatch, ws_sessionmaker)
+    await ghost_task
+    assert not ghost.accepted
+    assert ghost.closed == (WSC_POLICY_VIOLATION, "Device not registered")
+
+    # A handshake that validated the device JUST BEFORE the DELETE
+    # committed is refused by the manager instead of staying live.
+    raced = FakeWebSocket()
+    accepted = await connection_manager.connect(UID, raced)
+    assert accepted is False
+    assert raced.closed == (WSC_POLICY_VIOLATION, "Device not registered")
+    assert not connection_manager.has(UID)
+
+    # Re-registering the uid lifts the revocation: connectable again.
+    await register_device(client, token)
+    fresh, fresh_task = await open_socket(monkeypatch, ws_sessionmaker)
+    messages = await fresh.wait_for(1)
+    assert fresh.accepted
+    assert messages[0]["type"] == "playback.sync"
+    assert connection_manager.has(UID)
+
+    await close_socket(fresh, fresh_task)
+
+
 # --- Initial state and reconnection ---
 
 

@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 
+import 'device_authorization.dart';
 import 'device_identity.dart';
 import 'playback_state.dart';
 
@@ -24,12 +25,24 @@ import 'playback_state.dart';
 /// confirmado el campo se OMITE y el servidor guarda "unknown".
 /// El retirado `current_application` ya no se envía: el backend lo
 /// trató siempre como atributo inerte.
+///
+/// Autorización del canal WS: cada veredicto del servidor (200, 202,
+/// 404, 401, 422 o fallo de red) se traduce, cuando se inyecta
+/// [authorization], al estado compartido [DeviceAuthorization]. Solo
+/// la respuesta 200 confirma el registro y habilita la conexión
+/// WebSocket de playback. El primer heartbeat sale inmediatamente al
+/// arrancar el servicio y [firstHeartbeat] completa con ese veredicto:
+/// el arranque lo espera antes de armar el canal. Los dispositivos
+/// aún no registrados (202/404) latirán de forma progresiva
+/// (intervalo base → 1.5x → 2x) sin superar el TTL de descubrimiento
+/// del servidor (30 s), conservando el autodescubrimiento.
 class CauceHeartbeatService with WidgetsBindingObserver {
   CauceHeartbeatService({
     required this.baseUrl,
     required this.deviceUid,
     this.deviceKey,
     this.playbackState,
+    this.authorization,
     http.Client? client,
     Duration interval = const Duration(seconds: 10),
     Duration timeout = const Duration(seconds: 5),
@@ -55,6 +68,11 @@ class CauceHeartbeatService with WidgetsBindingObserver {
   /// pruebas aisladas del heartbeat.
   final PlaybackState? playbackState;
 
+  /// Estado de autorización compartido con el canal WS (null en
+  /// pruebas aisladas): cada veredicto del heartbeat se escribe aquí
+  /// y solo `registered` habilita la conexión de playback.
+  final DeviceAuthorization? authorization;
+
   final http.Client _client;
   final Duration _interval;
   final Duration _timeout;
@@ -70,6 +88,25 @@ class CauceHeartbeatService with WidgetsBindingObserver {
   bool _sending = false;
   bool _disposed = false;
   AppLifecycleState _lifecycle = AppLifecycleState.resumed;
+
+  /// Grado del intervalo progresivo entre heartbeats de dispositivos
+  /// aún no registrados (202/404): número de veredictos consecutivos
+  /// sin registro. Cualquier otro veredicto lo reinicia.
+  int _unregisteredStep = 0;
+
+  /// Último veredicto aplicado (arranque: unknown). Se rastrea aquí
+  /// además de en [authorization] para que el intervalo progresivo
+  /// también funcione sin coordinación inyectada (pruebas aisladas).
+  DeviceAuthorizationStatus _verdict = DeviceAuthorizationStatus.unknown;
+
+  /// Completa cuando termina el PRIMER heartbeat (con éxito o sin
+  /// él): el arranque esperará ese veredicto antes de armar el canal
+  /// WS. Se completa también al disponer el servicio para que nadie
+  /// quede colgado esperando.
+  Completer<void>? _firstHeartbeat;
+
+  Future<void> get firstHeartbeat =>
+      _firstHeartbeat?.future ?? Future<void>.value();
 
   // Log de advertencias de solo una vez hasta que un heartbeat tenga
   // éxito, para no spamear mientras el servidor está caído.
@@ -92,6 +129,11 @@ class CauceHeartbeatService with WidgetsBindingObserver {
       'server=$baseUrl, cada ${_interval.inSeconds}s)',
     );
     WidgetsBinding.instance.addObserver(this);
+    // Primer heartbeat inmediato (sin esperar el intervalo): su
+    // veredicto es la primera palabra del servidor sobre el registro
+    // y el arranque del canal WS lo espera.
+    _firstHeartbeat ??= Completer<void>();
+    unawaited(sendHeartbeat());
     _scheduleNext();
   }
 
@@ -107,6 +149,8 @@ class CauceHeartbeatService with WidgetsBindingObserver {
     _disposed = true;
     stop();
     WidgetsBinding.instance.removeObserver(this);
+    // Nadie debe quedar esperando un primer veredicto que no llegará.
+    _completeFirstHeartbeat();
     _client.close();
   }
 
@@ -122,7 +166,30 @@ class CauceHeartbeatService with WidgetsBindingObserver {
 
   void _scheduleNext() {
     if (_disposed) return;
-    _timer = Timer(_interval + _jitter(), _tick);
+    _timer = Timer(_nextInterval() + _jitter(), _tick);
+  }
+
+  /// Intervalo del siguiente heartbeat según el último veredicto:
+  /// confirmado o inalcanzable → intervalo base (detección rápida de
+  /// cambios y de recuperación de red); pendiente/desconocido →
+  /// progresivo (1x, 1x, 1.5x, 2x tope) para no sondear de forma
+  /// agresiva a un equipo que el administrador todavía no registra.
+  /// El tope queda por debajo del TTL de los pendientes del servidor
+  /// (30 s): el autodescubrimiento nunca pierde al dispositivo por
+  /// ralentizarse.
+  Duration _nextInterval() {
+    final unregistered = _verdict == DeviceAuthorizationStatus.pending ||
+        _verdict == DeviceAuthorizationStatus.unknown;
+    if (!unregistered) return _interval;
+    switch (_unregisteredStep) {
+      case 0:
+      case 1:
+        return _interval; // primer sondeo consecutivo sin registro: base
+      case 2:
+        return _interval * 1.5;
+      default:
+        return _interval * 2; // tope por debajo del TTL (30 s)
+    }
   }
 
   Duration _jitter() =>
@@ -181,6 +248,7 @@ class CauceHeartbeatService with WidgetsBindingObserver {
         _warnedUnregistered = false;
         _warnedPendingRegistration = false;
         _warnedFailure = false;
+        _applyVerdict(DeviceAuthorizationStatus.registered);
       } else if (response.statusCode == 202) {
         // Autoconfig activo: aceptado como descubrimiento pendiente de
         // registro; se sigue latiendo con normalidad.
@@ -191,28 +259,65 @@ class CauceHeartbeatService with WidgetsBindingObserver {
             'registro (autoconfig activo en el servidor)',
           );
         }
+        _applyVerdict(DeviceAuthorizationStatus.pending);
       } else if (response.statusCode == 404) {
         if (!_warnedUnregistered) {
           _warnedUnregistered = true;
           debugPrint(
             '[CAUCE] Heartbeat 404: "$deviceUid" aún no está registrado '
-            'en el servidor (autoconfig pendiente); se reintenta cada '
-            '${_interval.inSeconds}s',
+            'en el servidor (autoconfig pendiente); se reintenta de '
+            'forma progresiva',
           );
         }
+        _applyVerdict(DeviceAuthorizationStatus.unknown);
+      } else if (response.statusCode == 401) {
+        // Clave de dispositivo rechazada (X-Device-Key): configuración
+        // incompatible, no un rechazo de registro ni un fallo de red.
+        // Se sigue consultando por si la configuración del servidor
+        // cambia; el canal WS permanece bloqueado.
+        debugPrint(
+          '[CAUCE] Heartbeat 401: el servidor rechazó la clave de '
+          'dispositivo (X-Device-Key); revisa CAUCE_DEVICE_SECRET',
+        );
+        _applyVerdict(DeviceAuthorizationStatus.invalid);
       } else if (response.statusCode == 422) {
         debugPrint(
           '[CAUCE] Heartbeat 422: payload rechazado por el servidor, se '
           'detiene el servicio hasta corregir: ${response.body}',
         );
+        _applyVerdict(DeviceAuthorizationStatus.invalid);
         stop();
       } else {
         _warnFailure('HTTP ${response.statusCode}: ${response.body}');
+        _applyVerdict(DeviceAuthorizationStatus.unreachable);
       }
     } catch (e) {
       _warnFailure('$e');
+      // Fallo de red/servidor: no es un rechazo de registro. Mantiene
+      // el canal bloqueado hasta recuperar la confirmación, sin
+      // confundirlo con un 404.
+      _applyVerdict(DeviceAuthorizationStatus.unreachable);
     } finally {
       _sending = false;
+      _completeFirstHeartbeat();
+    }
+  }
+
+  /// Traduce el veredicto al estado de autorización compartido y
+  /// avanza (o reinicia) el intervalo progresivo de los dispositivos
+  /// reconocidos como no registrados (202/404).
+  void _applyVerdict(DeviceAuthorizationStatus verdict) {
+    _verdict = verdict;
+    final unregistered = verdict == DeviceAuthorizationStatus.pending ||
+        verdict == DeviceAuthorizationStatus.unknown;
+    _unregisteredStep = unregistered ? _unregisteredStep + 1 : 0;
+    authorization?.update(verdict);
+  }
+
+  void _completeFirstHeartbeat() {
+    final completer = _firstHeartbeat;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete();
     }
   }
 

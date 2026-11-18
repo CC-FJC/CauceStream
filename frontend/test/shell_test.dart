@@ -1,6 +1,7 @@
-// Verifica el shell principal: barra de 5 pestanas y el ciclo de
-// sondeo del inventario (un solo Timer compartido, cancelado al
-// desmontar).
+// Verifica el shell principal: la barra depende de la sesion
+// (admin: 5 pestanas solo con iconos; mediador: 4 con texto) y el
+// ciclo de sondeo del inventario (un solo Timer compartido, cancelado
+// al desmontar).
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -17,7 +18,9 @@ import 'package:cauce_stream/core/network/api_client.dart';
 import 'package:cauce_stream/navigation/main_shell.dart';
 import 'package:cauce_stream/services/device_service.dart';
 import 'package:cauce_stream/services/media_service.dart';
+import 'package:cauce_stream/controllers/room_controller.dart';
 import 'package:cauce_stream/services/role_service.dart';
+import 'package:cauce_stream/services/room_service.dart';
 import 'package:cauce_stream/services/thumbnail_service.dart';
 import 'package:cauce_stream/session/session_controller.dart';
 import 'package:cauce_stream/services/auth_service.dart';
@@ -80,12 +83,18 @@ void main() {
         findsNothing);
     expect(find.text('- ${AppInfo.institution}'), findsNothing);
 
-    // Barra de navegacion completa: "Usuarios" reemplazo al antiguo
-    // "Mas" (el perfil vive en el avatar del encabezado).
-    for (final label
-        in ['Inicio', 'Dispositivos', 'Biblioteca', 'Actividad', 'Usuarios']) {
+    // Sesion sin rol de administrador (mediador): barra de 4
+    // pestanas CON texto, sin "Usuarios" y sin tooltips.
+    for (final label in ['Inicio', 'Dispositivos', 'Biblioteca', 'Actividad']) {
       expect(find.text(label), findsWidgets);
     }
+    expect(find.text('Usuarios'), findsNothing);
+    expect(find.byTooltip('Usuarios'), findsNothing);
+    expect(
+      tester.widget<IndexedStack>(find.byType(IndexedStack)).children,
+      hasLength(4),
+      reason: 'sin permiso de gestion de personal la pestana no se monta',
+    );
 
     // Sondeo periodico: el inventario se consulta de nuevo a los 10 s.
     int listCalls() => requests
@@ -110,6 +119,99 @@ void main() {
     await tester.pump(const Duration(seconds: 10));
     expect(listCalls(), 3);
   });
+
+  testWidgets('admin: barra de 5 pestanas solo con iconos', (tester) async {
+    final apiClient = ApiClient(
+      baseUrl: 'http://10.15.1.150:8000/api',
+      client: MockClient((request) async => http.Response('[]', 200,
+          headers: {'content-type': 'application/json'})),
+    );
+    final devices = DevicesController(
+      service: DeviceService(client: apiClient),
+    );
+    final mediaService = MediaService(client: apiClient);
+    final mediaLibrary = MediaLibraryController(
+      service: mediaService,
+      thumbnails: ThumbnailService(
+        service: mediaService,
+        cacheDirectory: Directory.systemTemp.createTempSync('cauce_thumbs_adm'),
+      ),
+    );
+    final users = UsersController(
+      service: UserService(client: apiClient),
+      roleService: RoleService(client: apiClient),
+    );
+    final room = RoomController(service: RoomService(client: apiClient));
+    final session = _FakeAdminSession(
+      storage: _FakeStorage(),
+      authService: AuthService(client: apiClient),
+      userService: UserService(client: apiClient),
+      apiClient: apiClient,
+    );
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          // Tipeado explicito: sin el, el provider se registra con el
+          // tipo de la subclase y el shell no lo encuentra.
+          ChangeNotifierProvider<SessionController>.value(value: session),
+          ChangeNotifierProvider.value(value: devices),
+          ChangeNotifierProvider.value(value: mediaLibrary),
+          ChangeNotifierProvider.value(value: users),
+          // El modo admin monta la UI de control de sala, que consume
+          // este controlador (oculto para el mediador).
+          ChangeNotifierProvider.value(value: room),
+        ],
+        child: const MaterialApp(home: MainShell()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // Las 5 pestanas del admin van solo con iconos: el nombre vive en
+    // el tooltip y ninguna etiqueta come el ancho de la barra (el
+    // texto que queda es solo la cabecera de la pestana activa).
+    const labels = [
+      'Inicio', 'Dispositivos', 'Biblioteca', 'Actividad', 'Usuarios',
+    ];
+    for (final label in labels) {
+      expect(find.byTooltip(label), findsOneWidget);
+    }
+    expect(find.text('Inicio'), findsOneWidget,
+        reason: 'solo la cabecera de la pestana activa, nunca la barra');
+    expect(find.text('Dispositivos'), findsNothing);
+    expect(find.text('Biblioteca'), findsNothing);
+    expect(find.text('Actividad'), findsNothing);
+    expect(find.text('Usuarios'), findsNothing);
+    expect(
+      tester.widget<IndexedStack>(find.byType(IndexedStack)).children,
+      hasLength(5),
+      reason: 'el admin monta el arbol completo, incluida "Usuarios"',
+    );
+
+    // Tocar el icono (cubierto por su tooltip) cambia de pestana.
+    await tester.tap(find.byTooltip('Usuarios'));
+    await tester.pump();
+    expect(tester.widget<IndexedStack>(find.byType(IndexedStack)).index, 4);
+  });
+}
+
+/// Sesion de administrador declarada (perfil ya cargado): el shell no
+/// consulta el perfil y muestra el modo de 5 pestanas.
+class _FakeAdminSession extends SessionController {
+  _FakeAdminSession({
+    required super.storage,
+    required super.authService,
+    required super.userService,
+    required super.apiClient,
+  });
+
+  @override
+  bool get hasUser => true;
+
+  @override
+  bool get isAdmin => true;
 }
 
 class _FakeStorage implements TokenStorage {
