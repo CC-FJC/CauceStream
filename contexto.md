@@ -375,7 +375,32 @@ No asumir que el backend debe resolver directamente:
 
 El backend coordina y administra el ecosistema; las aplicaciones cliente ejecutan las capacidades específicas de cada dispositivo.
 
-## 19. Regla para futuras decisiones
+## 19. Diagnóstico abierto: experiencias webAR (`url`) en tablets
+
+Hallazgo de campo: al abrir el enlace de una experiencia AR en el navegador
+de una tablet Samsung, el navegador intentó abrir la sesión WebXR
+`immersive-ar` y falló con el mensaje nativo de Scene Viewer:
+"No hay sesión immersive-ar. Instala o actualiza Servicios de Google Play
+para RA (ARCore)".
+
+Implicaciones:
+
+- El mensaje es de ARCore (solo existe en Android) y aparece cuando el
+  navegador SÍ ofrece WebXR AR: el intent salió de un Chrome/Samsung
+  Internet externo, no se percibió a través del WebView in-app del cliente
+  (que no implementa WebXR; ver sección 18 de navegación in-app).
+- El fallo es instalación o actualización de ARCore ("Google Play Services
+  for AR"), o certificación del modelo. Pendiente distinguir entre ambas.
+- Verificaciones pendientes: comparar modelo exacto de la tablet con la
+  lista oficial de dispositivos ARCore; instalar o actualizar ARCore desde
+  Play Store y reabrir el enlace.
+- Nota de operación: instalar ARCore y cargar la experiencia web requiere
+  Internet una vez; la sesión AR en sí funciona offline dentro de la LAN.
+- Coherencia con el diseño: el WebView in-app nunca tendrá WebXR; las
+  experiencias webAR deben abrirse en el navegador del sistema
+  (apertura externa del mismo tipo por medio/configuración).
+
+## 20. Regla para futuras decisiones
 
 Cuando se agregue una nueva funcionalidad al backend, evaluar primero:
 
