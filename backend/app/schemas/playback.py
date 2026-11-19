@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.assignment import SyncStatus
+from app.schemas.assignment import DisplayMode, SyncStatus
 from app.schemas.media import MediaType
 
 PROTOCOL_VERSION = 1
@@ -38,6 +38,11 @@ class PlaybackAssignment(BaseModel):
     media_id: int
     revision: int = Field(ge=1)
     sync_status: SyncStatus
+    # Reproduction surface for `url` media, chosen per assignment:
+    # 'webview' (in-app) or 'external' (device-side fullscreen browser
+    # tab: Custom Tabs/Chrome). Clients that do not know the field
+    # ignore it and keep playing in-app ('webview' default).
+    display_mode: DisplayMode
     media: PlaybackMedia
 
 

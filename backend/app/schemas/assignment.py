@@ -7,11 +7,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 SyncStatus = Literal["synchronized", "pending"]
 
+# Reproduction surface of an assigned `url` media: in-app WebView or
+# an external fullscreen browser tab (device-side Custom Tabs/Chrome).
+DisplayMode = Literal["webview", "external"]
+
 
 class AssignmentCreate(BaseModel):
     """Payload for PUT /api/devices/{device_uid}/assignment."""
 
     media_id: int = Field(ge=1)
+    # Only meaningful for `url` media (the service rejects 'external'
+    # for any other type): the operator picks it per assignment and
+    # can flip it later by reassigning — the revision bump switches the
+    # client to the other surface immediately.
+    display_mode: DisplayMode = "webview"
 
 
 class AssignmentRead(BaseModel):
@@ -30,6 +39,8 @@ class AssignmentRead(BaseModel):
     media_id: int
     media_name: str
     sync_status: SyncStatus
+    # Reproduction surface chosen at assignment time ('url' media).
+    display_mode: DisplayMode
     revision: int = Field(ge=1)
     created_at: datetime
     updated_at: datetime

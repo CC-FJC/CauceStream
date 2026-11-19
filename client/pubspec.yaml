@@ -36,6 +36,11 @@ dependencies:
   pdfx: ^2.8.0
   path_provider: ^2.1.5
   url_launcher: ^6.3.1
+  # Custom Tabs fullscreen: medio `url` que requiere cámara (webAR) se
+  # abre en Chrome externo a pantalla completa (el WebView in-app no
+  # entrega frames de la cámara trasera en estos Samsung; ver
+  # docs/ar_webs_chrome_externo.md).
+  flutter_custom_tabs: ^2.4.0
   webview_flutter: ^4.13.0
   flutter_dotenv: ^5.2.1
   web_socket_channel: ^3.0.3

@@ -42,6 +42,7 @@ def _assignment_payload(assignment: DeviceMediaAssignment, media: Media) -> dict
         "media_id": assignment.media_id,
         "revision": assignment.revision,
         "sync_status": assignment.sync_status,
+        "display_mode": assignment.display_mode,
         "media": {
             "name": media.name,
             "media_type": media.media_type,

@@ -15,7 +15,15 @@ import 'services/power_executor.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: '.env');
+  // Dispositivos con sensor (tablets) rotan solos entre vertical y
+  // horizontal: todas las vistas del kiosk se adaptan a la orientación
+  // del momento (video/imagen con contain, screensaver con bounds en
+  // vivo). Se omite portraitDown (vertical boca abajo): una tablet en
+  // soporte no se sostiene invertida; si algún día se monta así, es
+  // una línea más. En Android TV no hay sensor y el landscape natural
+  // manda; en Windows/Linux la llamada es un no-op.
   SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
   ]);

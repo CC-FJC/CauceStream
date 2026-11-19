@@ -20,6 +20,7 @@ class Assignment {
     required this.revision,
     required this.createdAt,
     required this.updatedAt,
+    this.displayMode = 'webview',
     this.delivered,
   });
 
@@ -37,6 +38,14 @@ class Assignment {
   /// 'synchronized' | 'pending'. Dinamico: lo actualiza el backend;
   /// el polling del inventario lo refleja en la UI.
   final String syncStatus;
+
+  /// 'webview' | 'external'. Superficie de reproduccion de los medios
+  /// `url`, elegida AL ASIGNAR (nunca al registrar el medio):
+  /// 'external' abre la web en una pestana fullscreen de Chrome por
+  /// encima del kiosk (webAR con camara que el WebView in-app no
+  /// captura en algunos dispositivos). Cambiar el modo reasigna: la
+  /// revision nueva conmuta al cliente de una superficie a la otra.
+  final String displayMode;
 
   /// Version de la asignacion: incrementa en cada reemplazo.
   final int revision;
@@ -57,6 +66,7 @@ class Assignment {
     mediaId: json['media_id'] as int,
     mediaName: json['media_name'] as String,
     syncStatus: json['sync_status'] as String? ?? 'pending',
+    displayMode: json['display_mode'] as String? ?? 'webview',
     revision: json['revision'] as int,
     delivered: json['delivered'] as bool?,
     createdAt: DateTime.parse(json['created_at'] as String),

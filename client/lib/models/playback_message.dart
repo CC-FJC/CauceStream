@@ -124,6 +124,22 @@ class AssignmentMedia {
   }
 }
 
+/// Superficie de reproducción de un medio `url`, elegida por
+/// asignación en la administración (nunca por medio): 'webview'
+/// reproduce dentro del cliente; 'external' abre la web en una pestaña
+/// fullscreen de Chrome por encima del kiosk (webAR con cámara que el
+/// WebView in-app no captura en algunos dispositivos). El flip de modo
+/// reasigna con revisión nueva y el cliente conmuta de superficie.
+enum UrlDisplayMode {
+  webview,
+  external;
+
+  /// Tolerante al cliente desactualizado: desconocido/ausente →
+  /// 'webview' (el default del servidor desde siempre).
+  static UrlDisplayMode fromWire(String? value) =>
+      value == 'external' ? UrlDisplayMode.external : UrlDisplayMode.webview;
+}
+
 /// La asignación vigente (`assignment` en sync/command).
 class AssignmentMessage {
   const AssignmentMessage({
@@ -131,6 +147,7 @@ class AssignmentMessage {
     required this.mediaId,
     required this.revision,
     required this.syncStatus,
+    required this.displayMode,
     required this.media,
   });
 
@@ -148,6 +165,10 @@ class AssignmentMessage {
   /// Estado persistido en el instante del envío ('synchronized' |
   /// 'pending'). Informativo: el cliente no lo usa para decidir nada.
   final String syncStatus;
+
+  /// Superficie de reproducción si el medio es `url` (webview |
+  /// external, por asignación). El applier lo consulta en `showUrl`.
+  final UrlDisplayMode displayMode;
   final AssignmentMedia media;
 
   static AssignmentMessage? fromJson(Map<String, dynamic> json) {
@@ -174,6 +195,7 @@ class AssignmentMessage {
       mediaId: mediaId,
       revision: revision,
       syncStatus: syncStatus,
+      displayMode: UrlDisplayMode.fromWire(json['display_mode'] as String?),
       media: media,
     );
   }

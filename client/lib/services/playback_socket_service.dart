@@ -43,10 +43,16 @@ abstract class PlaybackApplier {
   /// cuando el documento cargó y quedó en pantalla.
   Future<bool> showPdf(File file, AssignmentMedia media);
 
-  /// Muestra un medio `url` a pantalla completa (WebView in-app donde
-  /// la plataforma lo soporta). true solo cuando la página quedó en
-  /// pantalla.
-  Future<bool> showUrl(Uri url, AssignmentMedia media);
+  /// Muestra un medio `url`: 'external' abre la web en una pestaña
+  /// fullscreen de Chrome por encima del kiosk (webAR con cámara);
+  /// 'webview' la monta in-app donde la plataforma lo soporta (en el
+  /// resto de plataformas ambos modos caen al navegador del sistema).
+  /// true solo cuando la página quedó en pantalla.
+  Future<bool> showUrl(
+    Uri url,
+    AssignmentMedia media,
+    UrlDisplayMode displayMode,
+  );
 
   /// Vuelve al comportamiento por defecto (screensaver).
   Future<bool> showDefault();
@@ -573,7 +579,7 @@ class PlaybackSocketService {
     await _display(
       applier,
       assignment,
-      () => applier.showUrl(url, assignment.media),
+      () => applier.showUrl(url, assignment.media, assignment.displayMode),
     );
   }
 

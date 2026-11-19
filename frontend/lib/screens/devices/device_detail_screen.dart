@@ -209,15 +209,15 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         media: library.media,
         currentMediaId: currentId,
         thumbnails: library.thumbnails,
-        onSelected: (selected) {
+        onSelected: (selected, displayMode) {
           Navigator.of(sheetContext).pop();
-          _assign(selected);
+          _assign(selected, displayMode);
         },
       ),
     );
   }
 
-  Future<void> _assign(Media media) async {
+  Future<void> _assign(Media media, String? displayMode) async {
     final messenger = ScaffoldMessenger.of(context);
     final service = context.read<DevicesController>().assignmentService;
     if (service == null) return;
@@ -225,6 +225,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       final assignment = await service.assignMedia(
         widget.device.deviceUid,
         media.id,
+        displayMode: displayMode,
       );
       if (!mounted) return;
       // Muestra exactamente lo que respondio el backend (normalmente
@@ -606,7 +607,10 @@ class _MediaPickerSheet extends StatefulWidget {
   final List<Media> media;
   final int? currentMediaId;
   final ThumbnailService thumbnails;
-  final ValueChanged<Media> onSelected;
+
+  /// Medio elegido y superficie de reproduccion para medios `url`
+  /// ('webview' | 'external'; null cuando el medio no es enlace).
+  final void Function(Media media, String? displayMode) onSelected;
 
   @override
   State<_MediaPickerSheet> createState() => _MediaPickerSheetState();
@@ -622,6 +626,10 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
 
   String _filter = 'all';
   Media? _selected;
+
+  /// Superficie para el enlace seleccionado: 'webview' (Navegador
+  /// Sencillo, dentro del cliente) | 'external' (Chrome fullscreen).
+  String _displayMode = 'webview';
 
   @override
   Widget build(BuildContext context) {
@@ -705,10 +713,58 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
                 ),
               ),
             const SizedBox(height: 12),
+            if (_selected != null && _selected!.isUrl) ...[
+              const Text(
+                'REPRODUCIR EN',
+                style: TextStyle(
+                  fontFamily: CauceTheme.bodyFont,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.4,
+                  color: CauceColors.peachOnSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  _modeChip(
+                    'webview',
+                    'Navegador Sencillo',
+                    Icons.web_outlined,
+                  ),
+                  const SizedBox(width: 8),
+                  _modeChip(
+                    'external',
+                    'Chrome',
+                    Icons.open_in_new,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _displayMode == 'external'
+                    ? 'El enlace abre en Chrome a pantalla completa sobre el '
+                        'kiosk (para AR con camara). El dispositivo sigue en '
+                        'linea; cambiar de contenido cierra la web.'
+                    : 'El enlace se muestra en el Navegador Sencillo del '
+                        'cliente. Si la experiencia no corre ahi (p. ej. AR '
+                        'con camara), elige Chrome.',
+                style: const TextStyle(
+                  fontFamily: CauceTheme.bodyFont,
+                  fontSize: 11,
+                  height: 1.4,
+                  color: CauceColors.peachOnSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             FilledButton.icon(
               onPressed: _selected == null
                   ? null
-                  : () => widget.onSelected(_selected!),
+                  : () => widget.onSelected(
+                        _selected!,
+                        _selected!.isUrl ? _displayMode : null,
+                      ),
               style: FilledButton.styleFrom(
                 backgroundColor: CauceColors.creamPrimary,
                 padding: const EdgeInsets.symmetric(vertical: 14),
@@ -723,6 +779,48 @@ class _MediaPickerSheetState extends State<_MediaPickerSheet> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _modeChip(String value, String label, IconData icon) {
+    final active = _displayMode == value;
+    return Expanded(
+      child: Material(
+        color: active
+            ? CauceColors.creamPrimary
+            : CauceColors.peachSurfaceContainer.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => setState(() => _displayMode = value),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  icon,
+                  size: 15,
+                  color: active ? CauceColors.maroon : CauceColors.darkTeal,
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: CauceTheme.displayFont,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: active ? CauceColors.maroon : CauceColors.darkTeal,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

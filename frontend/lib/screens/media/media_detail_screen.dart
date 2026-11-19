@@ -573,6 +573,11 @@ class _AssignSheetState extends State<_AssignSheet> {
   int _processed = 0;
   int _ok = 0;
 
+  /// Superficie de reproduccion para medios `url`: 'webview' | 'external'.
+  /// Solo relevante (y solo visible) cuando el medio es un enlace; el
+  /// resto de tipos viaja siempre en 'webview' (el backend lo valida).
+  String _displayMode = 'webview';
+
   Assignment? _assignmentOf(String deviceUid) {
     for (final a in widget.assignments) {
       if (a.deviceUid == deviceUid) return a;
@@ -595,6 +600,7 @@ class _AssignSheetState extends State<_AssignSheet> {
         final assignment = await widget.service.assignMedia(
           uid,
           widget.media.id,
+          displayMode: widget.media.isUrl ? _displayMode : null,
         );
         _ok++;
         if (assignment.delivered == false) {
@@ -654,6 +660,66 @@ class _AssignSheetState extends State<_AssignSheet> {
               ),
             ),
             const SizedBox(height: 12),
+            if (widget.media.isUrl)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'REPRODUCIR EN',
+                    style: TextStyle(
+                      fontFamily: CauceTheme.bodyFont,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.4,
+                      color: CauceColors.creamOnSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _SurfaceChip(
+                          label: 'Navegador Sencillo',
+                          icon: Icons.web_outlined,
+                          selected: _displayMode == 'webview',
+                          onTap: _running
+                              ? null
+                              : () => setState(() => _displayMode = 'webview'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _SurfaceChip(
+                          label: 'Chrome',
+                          icon: Icons.open_in_new,
+                          selected: _displayMode == 'external',
+                          onTap: _running
+                              ? null
+                              : () =>
+                                  setState(() => _displayMode = 'external'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _displayMode == 'external'
+                        ? 'La web abre en Chrome a pantalla completa sobre el '
+                            'kiosk (para AR con camara). El dispositivo sigue '
+                            'en linea; cambiar de contenido cierra la web.'
+                        : 'La web se muestra en el Navegador Sencillo del '
+                            'cliente. Si la experiencia no corre ahi (p. ej. AR '
+                            'con camara), reasigna en "Chrome".',
+                    style: const TextStyle(
+                      fontFamily: CauceTheme.bodyFont,
+                      fontSize: 11,
+                      height: 1.4,
+                      color: CauceColors.creamOnSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+              ),
             if (widget.devices.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
@@ -919,6 +985,74 @@ class _DeviceAssignRow extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Chip de seleccion de superficie de reproduccion para medios `url`
+/// dentro del sheet de asignacion: WebView (en la app) o pestana
+/// fullscreen de Chrome por encima del kiosk. Estadoles binario: el
+/// estado vive en `_AssignSheetState._displayMode`.
+class _SurfaceChip extends StatelessWidget {
+  const _SurfaceChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? CauceColors.creamPrimary : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color:
+                selected
+                    ? CauceColors.creamPrimary
+                    : CauceColors.creamSurfaceContainerHigh,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: selected
+                  ? CauceColors.maroon
+                  : CauceColors.creamOnSurfaceVariant,
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: CauceTheme.bodyFont,
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected
+                      ? CauceColors.maroon
+                      : CauceColors.creamOnSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

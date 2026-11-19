@@ -119,8 +119,12 @@ class FakeApplier implements PlaybackApplier {
       _record('video', media, file.path);
 
   @override
-  Future<bool> showUrl(Uri url, AssignmentMedia media) async =>
-      _record('url', media, url.toString());
+  Future<bool> showUrl(
+    Uri url,
+    AssignmentMedia media,
+    UrlDisplayMode displayMode,
+  ) async =>
+      _record('url', media, '${displayMode.name}:${url.toString()}');
 
   @override
   Future<bool> showPdf(File file, AssignmentMedia media) async =>
@@ -215,12 +219,14 @@ Map<String, dynamic> assignmentJson({
   String mediaType = 'image',
   String? fileUrl = '/api/media/5/file',
   String? externalUrl,
+  String? displayMode,
 }) {
   return {
     'assignment_id': assignmentId,
     'media_id': mediaId,
     'revision': revision,
     'sync_status': 'pending',
+    if (displayMode != null) 'display_mode': displayMode,
     'media': {
       'name': 'medio-$mediaId',
       'media_type': mediaType,
@@ -439,7 +445,28 @@ void main() {
     await pumpEventQueue();
 
     expect(downloader.requests, isEmpty, reason: 'una url nunca se descarga');
-    expect(applier.calls.single, 'url:medio-8:https://example.com/pantalla');
+    expect(applier.calls.single,
+        'url:medio-8:webview:https://example.com/pantalla');
+    expect(playbackState.currentMediaId, 8);
+  });
+
+  test('asignación con display_mode external llega al applier', () async {
+    final applier = FakeApplier();
+    service.attach(applier);
+
+    socket().serverSend(jsonEncode(
+      commandJson(assignmentJson(
+        mediaId: 8,
+        revision: 2,
+        mediaType: 'url',
+        fileUrl: null,
+        externalUrl: 'https://example.com/ar',
+        displayMode: 'external',
+      )),
+    ));
+    await pumpEventQueue();
+
+    expect(applier.calls.single, 'url:medio-8:external:https://example.com/ar');
     expect(playbackState.currentMediaId, 8);
   });
 

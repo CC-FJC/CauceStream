@@ -31,10 +31,21 @@ class AssignmentService {
   /// casi siempre): el paso a `synchronized` lo hace el servidor
   /// cuando el dispositivo reporta reproducir el medio; la UI solo
   /// muestra lo que el backend responde.
-  Future<Assignment> assignMedia(String deviceUid, int mediaId) async {
+  ///
+  /// [displayMode] ('webview' | 'external') solo viaja cuando el
+  /// medio es `url`: decide si el cliente lo reproduce en su WebView
+  /// in-app o en una pestana fullscreen de Chrome por encima del
+  /// kiosk. Cambiarlo reasigna (revision nueva) y el cliente
+  /// conmuta de superficie; null usa el default del servidor
+  /// ('webview').
+  Future<Assignment> assignMedia(
+    String deviceUid,
+    int mediaId, {
+    String? displayMode,
+  }) async {
     final data = await _client.put(
       '${ApiConfig.devicesPath}/${Uri.encodeComponent(deviceUid)}/assignment',
-      body: {'media_id': mediaId},
+      body: {'media_id': mediaId, 'display_mode': ?displayMode},
     );
     return Assignment.fromJson(data as Map<String, dynamic>);
   }

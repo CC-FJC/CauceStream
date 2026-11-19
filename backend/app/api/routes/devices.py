@@ -297,7 +297,9 @@ async def assign_media(
       device was not connected, the persisted assignment reaches it via
       `playback.sync` on its next connection.
     """
-    return await service.assign(device_uid, payload.media_id)
+    return await service.assign(
+        device_uid, payload.media_id, payload.display_mode
+    )
 
 
 @router.post(

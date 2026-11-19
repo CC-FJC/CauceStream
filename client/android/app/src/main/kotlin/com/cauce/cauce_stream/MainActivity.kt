@@ -45,6 +45,22 @@ class MainActivity : FlutterActivity() {
                         // así que no se usa; se lee de NetworkInterface.
                         result.success(activeMacAddress())
                     }
+                    "startKeepAlive" -> {
+                        // Servicio en primer plano mientras una web
+                        // externa (Custom Tab) está abierta encima: sin
+                        // él Android congela al cliente en background y
+                        // el WS se revoca por heartbeats caídos.
+                        try {
+                            KeepAliveService.start(this)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
+                    }
+                    "stopKeepAlive" -> {
+                        KeepAliveService.stop(this)
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }

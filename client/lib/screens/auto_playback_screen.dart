@@ -4,6 +4,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_custom_tabs/flutter_custom_tabs.dart' as custom_tabs;
 import 'package:pdfx/pdfx.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
@@ -62,7 +64,10 @@ enum _DisplayMode {
 }
 
 class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
+    with WidgetsBindingObserver
     implements PlaybackApplier {
+  static const MethodChannel _deviceChannel =
+      MethodChannel('cauce_stream/device');
   VideoPlayerController? _controller;
   bool _initialized = false;
   String? _statusMessage;
@@ -86,6 +91,13 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   PdfController? _pdfController;
   String? _assignedMediaName;
 
+  /// Medio `url` que ya está abierto en un Custom Tab fullscreen (webAR
+  /// con cámara por Chrome externo): la pantalla muestra solo la
+  /// dirección con el botón "Volver a la WEB", nunca monta el WebView
+  /// in-app para el mismo URL. Si el mediador cierra la ventana con
+  /// la X, la asignación sigue vigente y la tarjeta queda en pantalla.
+  bool _assignedUrlExternal = false;
+
   /// Completers de carga pendientes por URL asignada (modo `url` con
   /// WebView in-app): el `showUrl` espera a que la web confirme en
   /// pantalla antes de devolver true.
@@ -102,10 +114,87 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   @override
   void initState() {
     super.initState();
-    // Sin asignación del servidor la pantalla arranca directamente en el
-    // screensaver (logo rebotando); no hay nada que cargar de la red.
-    // El servicio global (WS de playback) nos conduce mediante este applier.
+    WidgetsBinding.instance.addObserver(this);
+    // Al volver el kiosk a primer plano la web externa ya no está: el
+    // mediador cerró el Custom Tab (gesto atrás). Se detiene la vida
+    // artificial y queda la dirección debajo; la próxima asignación
+    // reabre la web con su nueva generación.
+    // Sin asignación del servidor la pantalla arranca directamente en
+    // screensaver; el servicio global (WS) conduce mediante este applier.
     widget.playbackService?.attach(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _mode == _DisplayMode.assignedUrl &&
+        _assignedUrlExternal) {
+      // El mediador volvió al kiosk con el medio externo asignado (lo
+      // más común: cerró la web con la X del Custom Tab o el gesto
+      // atrás, sin orden nueva del servidor). La asignación sigue
+      // vigente: la tarjeta queda en pantalla con "Volver a la WEB".
+      // Solo se apaga la vida artificial: con la web cerrada nada
+      // corre fuera de la app. No se toca la ventana de Chrome (si
+      // quedó viva tras un Home, el mediador puede volver a ella
+      // desde recientes con la sesión intacta, y "Volver a la WEB"
+      // vuelve a levantar el servicio). No se reabre sola (el gesto
+      // fue deliberado) y jamás se monta el WebView in-app para un
+      // medio marcado externo.
+      unawaited(_stopForegroundKeepAlive());
+    }
+  }
+
+  /// Detiene el servicio de primer plano: el kiosk está en pantalla,
+  /// nada corriendo fuera de la app necesita vida artificial.
+  Future<void> _stopForegroundKeepAlive() async {
+    try {
+      await _deviceChannel.invokeMethod('stopKeepAlive');
+    } catch (e) {
+      debugPrint('[CAUCE] No se pudo detener el keep-alive: $e');
+    }
+  }
+
+  /// Cierra la web externa (Custom Tab) si hay una abierta y detiene
+  /// el servicio en primer plano que mantuvo vivo al cliente en
+  /// background. Lo llama todo cambio de medio: cambiar de experiencia
+  /// cierra la ventana del navegador — el servidor nunca pierde el
+  /// control del dispositivo.
+  Future<void> _closeExternalUrlIfOpen() async {
+    if (!_assignedUrlExternal) return;
+    _assignedUrlExternal = false;
+    try {
+      await _deviceChannel.invokeMethod('stopKeepAlive');
+      await custom_tabs.closeCustomTabs();
+    } catch (e) {
+      debugPrint('[CAUCE] No se pudo cerrar la web externa: $e');
+    }
+  }
+
+  /// Abre (o reabre) la web externa del medio asignado: Custom Tab
+  /// fullscreen de Chrome por encima del kiosk. Lo llama la orden de
+  /// reproducción del servidor y el botón "Volver a la WEB" cuando el
+  /// mediador cerró la ventana con la X; la asignación no cambia.
+  Future<bool> _openExternalUrl(Uri url) async {
+    try {
+      // Sin el servicio en primer plano Android congela al cliente en
+      // background mientras el Custom Tab está encima: timers y red se
+      // detienen, el heartbeat da "unreachable", el propio cliente
+      // revoca el WS y el servidor pierde el control hasta cerrar la
+      // web.
+      await _deviceChannel.invokeMethod('startKeepAlive');
+      await custom_tabs.launchUrl(
+        url,
+        prefersDeepLink: false,
+        customTabsOptions: const custom_tabs.CustomTabsOptions(
+          urlBarHidingEnabled: true,
+          showTitle: false,
+        ),
+      );
+      return true;
+    } catch (e) {
+      debugPrint('[CAUCE] No se pudo abrir el Custom Tab fullscreen: $e');
+      return false;
+    }
   }
 
   // --- PlaybackApplier (órdenes del WS de Cauce) ---
@@ -113,6 +202,7 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   @override
   Future<bool> showImage(File file, AssignmentMedia media) async {
     final gen = ++_displayGen;
+    await _closeExternalUrlIfOpen();
     try {
       // Confirma que la imagen decodifica ANTES de quitar el medio
       // actual de pantalla.
@@ -139,6 +229,7 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   @override
   Future<bool> showVideo(File file, AssignmentMedia media) async {
     final gen = ++_displayGen;
+    await _closeExternalUrlIfOpen();
     try {
       final ctrl = VideoPlayerController.file(file);
       await ctrl.initialize();
@@ -167,10 +258,37 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   }
 
   @override
-  Future<bool> showUrl(Uri url, AssignmentMedia media) async {
+  Future<bool> showUrl(
+    Uri url,
+    AssignmentMedia media,
+    UrlDisplayMode displayMode,
+  ) async {
     final gen = ++_displayGen;
     if (_disposed || gen != _displayGen) return false;
     _stopVideo();
+    await _closeExternalUrlIfOpen();
+
+    // Asignado como 'external': la web (p. ej. webAR con cámara que
+    // el WebView in-app no captura en este dispositivo) abre en una
+    // pestaña fullscreen de Chrome por encima del kiosk. El cliente
+    // queda debajo, vivo y latiendo — NUNCA se trae al frente. Solo
+    // Android/iOS: el resto de plataformas cae al navegador del
+    // sistema igual (misma pieza de abajo).
+    if (displayMode == UrlDisplayMode.external && _inAppWebViewSupported) {
+      final opened = await _openExternalUrl(url);
+      if (_disposed || gen != _displayGen) return false;
+      if (!opened) return false;
+      _failPendingUrlLoads();
+      setState(() {
+        _mode = _DisplayMode.assignedUrl;
+        _assignedUrl = url;
+        _assignedMediaName = media.name;
+        _assignedUrlExternal = true;
+        _initialized = false;
+      });
+      debugPrint('[CAUCE] Medio url abierto en Custom Tab fullscreen: $url');
+      return true;
+    }
 
     if (!_inAppWebViewSupported) {
       // Plataformas sin WebView in-app (Windows/Linux/web): la URL se
@@ -224,6 +342,7 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   @override
   Future<bool> showPdf(File file, AssignmentMedia media) async {
     final gen = ++_displayGen;
+    await _closeExternalUrlIfOpen();
     if (_disposed || gen != _displayGen) return false;
     _stopVideo();
     _failPendingUrlLoads();
@@ -291,6 +410,7 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   @override
   Future<bool> showDefault() async {
     if (_disposed) return false;
+    await _closeExternalUrlIfOpen();
     // Ya en el modo por defecto (screensaver con el logo rebotando).
     if (_mode == _DisplayMode.screensaver) return true;
     // Nueva generación: invalida cargas pendientes de órdenes viejas.
@@ -441,6 +561,7 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.playbackService?.detach(this);
     _disposed = true;
     _failPendingUrlLoads();
@@ -523,6 +644,12 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
         key: ValueKey('url-view:$url'),
         child: customBuilder(url, (ok, _) => _completeUrlLoad(url, ok)),
       );
+    } else if (_assignedUrlExternal) {
+      // El medio es 'external': la web corre en el Custom Tab encima
+      // del kiosk, o el mediador la cerró con la X y la tarjeta le
+      // deja reabrirla. Nunca se monta el WebView in-app (la
+      // asignación decidió que este URL no va ahí).
+      child = _buildExternalUrlCard(url);
     } else if (_inAppWebViewSupported) {
       child = KioskWebView(
         key: ValueKey('kiosk-web-view:$url'),
@@ -590,6 +717,64 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
         ],
       ),
     );
+  }
+
+  /// Tarjeta del medio `url` externo mientras la web no está en
+  /// pantalla: nombre, dirección y el botón que la reabre. La
+  /// asignación vigente no cambia: reabrir no es reasignar.
+  Widget _buildExternalUrlCard(Uri url) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 48),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Icon(
+              Icons.open_in_new,
+              size: 44,
+              color: Color(0xFF1565C0),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              _assignedMediaName ?? 'Experiencia web',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 26,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              url.toString(),
+              style: const TextStyle(color: Colors.white70, fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 32),
+            FilledButton.icon(
+              onPressed: () => _reopenExternalUrl(url),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 18),
+                shape: const StadiumBorder(),
+              ),
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('Volver a la WEB'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// El mediador pulsó "Volver a la WEB": relanza el Custom Tab (la
+  /// web vuelve a cubrir el kiosk). La asignación vigente no cambia:
+  /// reabrir no es reasignar, así que no hay órdenes al servidor.
+  Future<void> _reopenExternalUrl(Uri url) async {
+    final opened = await _openExternalUrl(url);
+    debugPrint('[CAUCE] Web externa ${opened ? 'reabierta' : 'no reabierta'} '
+        'tras la X: $url');
   }
 
   Widget _buildLoading() {

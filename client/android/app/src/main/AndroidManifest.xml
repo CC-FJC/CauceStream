@@ -7,6 +7,13 @@
          ACQUIRE_CAUSES_WAKEUP; permiso normal, no peligroso) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Servicio en primer plano que evita el congelado en background
+         mientras una web externa (Custom Tab) está abierta sobre el
+         kiosk: mantiene heartbeats y WS vivos (specialUse: kiosk de
+         sala, app institucional instalada por ADB). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- Android TV requirement -->
     <uses-feature
         android:name="android.hardware.touchscreen"
@@ -60,6 +67,15 @@
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
+
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Kiosk de sala: mantiene el canal de control (heartbeat/WS) activo mientras una experiencia web externa se muestra a pantalla completa." />
+        </service>
 
         <meta-data
             android:name="flutterEmbedding"

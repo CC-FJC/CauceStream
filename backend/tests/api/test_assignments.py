@@ -50,10 +50,13 @@ async def heartbeat(client, uid=UID, **payload_overrides):
     return await client.post(f"/api/devices/{uid}/heartbeat", json=payload)
 
 
-async def assign(client, token, uid=UID, media_id=None):
+async def assign(client, token, uid=UID, media_id=None, display_mode=None):
+    payload = {"media_id": media_id}
+    if display_mode is not None:
+        payload["display_mode"] = display_mode
     return await client.put(
         f"/api/devices/{uid}/assignment",
-        json={"media_id": media_id},
+        json=payload,
         headers=bearer(token),
     )
 
@@ -208,3 +211,82 @@ async def test_assignment_permissions(client, admin, mediator):
         headers=bearer(mediator_token),
     )
     assert forbidden.status_code == 403
+
+
+# --- Display mode (reproduction surface of `url` media) ---
+
+
+async def test_assign_defaults_to_webview_display_mode(client, admin, db_session):
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+    media_id = await create_media(db_session)
+
+    response = await assign(client, token, media_id=media_id)
+    assert response.status_code == 200, response.text
+    assert response.json()["display_mode"] == "webview"
+
+    listing = await assignments(client, token)
+    assert listing[0]["display_mode"] == "webview"
+
+
+async def test_assign_external_display_mode_for_url_media(client, admin, db_session):
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+    media_id = await create_media(db_session)
+
+    response = await assign(
+        client, token, media_id=media_id, display_mode="external"
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["display_mode"] == "external"
+
+    listing = await assignments(client, token)
+    assert listing[0]["display_mode"] == "external"
+
+
+async def test_assign_external_rejected_for_non_url_media(client, admin, db_session):
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+    video = Media(
+        name="Video sala",
+        media_type="video",
+        file_path="/tmp/loop.mp4",
+        mime_type="video/mp4",
+        file_size=10,
+    )
+    db_session.add(video)
+    await db_session.commit()
+
+    response = await assign(
+        client, token, media_id=video.id, display_mode="external"
+    )
+    assert response.status_code == 400, response.text
+    assert "url" in response.json()["detail"]
+
+    # Y sin modo explicito, un medio no-url asigna normal.
+    ok = await assign(client, token, media_id=video.id)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["display_mode"] == "webview"
+
+
+async def test_flip_display_mode_bumps_revision(client, admin, db_session):
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+    media_id = await create_media(db_session)
+
+    first = await assign(client, token, media_id=media_id)
+    assert first.status_code == 200, first.text
+    assert first.json()["display_mode"] == "webview"
+    revision = first.json()["revision"]
+
+    flip = await assign(
+        client, token, media_id=media_id, display_mode="external"
+    )
+    assert flip.status_code == 200, flip.text
+    assert flip.json()["display_mode"] == "external"
+    assert flip.json()["revision"] > revision
+
+    back = await assign(client, token, media_id=media_id)
+    assert back.status_code == 200, back.text
+    assert back.json()["display_mode"] == "webview"
+    assert back.json()["revision"] > flip.json()["revision"]

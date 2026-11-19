@@ -10,6 +10,7 @@ import 'package:cauce_stream/main.dart';
 import 'package:cauce_stream/models/playback_message.dart';
 import 'package:cauce_stream/screens/auto_playback_screen.dart';
 import 'package:cauce_stream/services/playback_socket_service.dart';
+import 'package:cauce_stream/widgets/dvd_screensaver.dart';
 
 /// Plataforma de video falsa: no decodifica nada, solo informa el
 /// tamaño (efectivo, ya rotado) del video asignado.
@@ -275,6 +276,7 @@ void main() {
       final future = applier.showUrl(
         Uri.parse('https://example.com/pantalla'),
         _mediaUrl('pantalla'),
+        UrlDisplayMode.webview,
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
@@ -299,6 +301,7 @@ void main() {
       final future = applier.showUrl(
         Uri.parse('https://example.com/caida'),
         _mediaUrl('caida'),
+        UrlDisplayMode.webview,
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
@@ -317,11 +320,35 @@ void main() {
       final urlFuture = applier.showUrl(
         Uri.parse('https://example.com/lenta'),
         _mediaUrl('lenta'),
+        UrlDisplayMode.webview,
       );
       await tester.pump();
 
       expect(await applier.showDefault(), isTrue);
       expect(await urlFuture, isFalse);
+    });
+  });
+
+  group('Orientación', () {
+    testWidgets('en vertical (600x800) el kiosk llena la pantalla sin '
+        'recortar: en tablets la rotación es automática', (tester) async {
+      tester.view.physicalSize = const Size(600, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await _pumpScreen(tester);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // El screensaver (modo por defecto) ocupa la pantalla vertical
+      // completa: nada asume landscape.
+      expect(
+        tester.getSize(find.byType(Scaffold)),
+        const Size(600, 800),
+      );
+      expect(
+        tester.getSize(find.byType(DvdScreensaver)),
+        const Size(600, 800),
+      );
     });
   });
 }
