@@ -88,6 +88,12 @@ Future<PlaybackSocketService?> _startDeviceServices() async {
   // ausente jamás debe retrasar el heartbeat ni el WebSocket).
   final powerExecutor = const MethodChannelPowerExecutor();
   unawaited(_logPowerCapabilities(powerExecutor));
+  // Provisionamiento de tablet (diálogos del sistema, una sola vez por
+  // instalación): Device Admin para apagar la pantalla por orden
+  // remota y exención de optimización de batería para que en espera el
+  // cliente siga alcanzable. En TV Owner ya aprovisionada y en
+  // plataformas sin canal, es un no-op silencioso.
+  unawaited(_ensurePowerProvisioning(powerExecutor));
 
   // El heartbeat NO lo sustituye el WS: sigue reportando conectividad
   // y el medio realmente en reproducción. Su primer latido es
@@ -135,6 +141,51 @@ Future<void> _logPowerCapabilities(PowerExecutor executor) async {
     }
   } catch (e) {
     debugPrint('[CAUCE] No se pudieron consultar las capacidades de energía: $e');
+  }
+}
+
+/// Pide al mediador (una vez por instalación, en diálogos del sistema)
+/// los permisos que hacen viable el control de pantalla en tablets
+/// sin aprovisionarlas como Device Owner:
+/// 1. Notificaciones → One UI cancela ENCENDER en apps sin ellas.
+/// 2. Device Admin clásico → `enterStandby` (goToSleep/lockNow).
+/// 3. Exención de optimización de batería → en espera el cliente no
+///    pierde red ni timers: el servidor puede despertarlo.
+/// Ya-provisionado (TV Owner) o sin canal (desktop): no-op. Corre en
+/// segundo plano: nunca retrasa heartbeats ni WebSocket.
+Future<void> _ensurePowerProvisioning(PowerExecutor executor) async {
+  try {
+    final caps = await executor.capabilities();
+    if (caps.deviceOwner) {
+      // TV ya aprovisionada como Device Owner: nada que pedir.
+      return;
+    }
+    final notifications = await executor.requestNotifications();
+    debugPrint(
+      '[CAUCE] Notificaciones ${notifications ? 'habilitadas o '
+          'solicitadas' : 'no se pudieron pedir'}: One UI exige '
+          'notificaciones activas para ENCENDER la pantalla',
+    );
+    if (!caps.adminActive) {
+      final launched = await executor.requestDeviceAdmin();
+      debugPrint(
+        '[CAUCE] Device Admin ${launched ? 'pendiente de activar '
+            '(diálogo del sistema abierto)': 'no se pudo pedir'}: sin él, '
+            'APAGAR PANTALLA quedará denegado en esta tablet',
+      );
+    }
+    final exempt = await executor.requestIgnoreBatteryOptimizations();
+    debugPrint(
+      '[CAUCE] Exención de optimización de batería '
+      '${exempt ? 'activa o solicitada' : 'no se pudo pedir'}: sin ella, '
+      'en espera la tablet dejaría de responder al servidor',
+    );
+  } on PowerExecutorException catch (e) {
+    // platformUnsupported (desktop) y derivados: sin canal nativo no
+    // hay nada que provisionar en este dispositivo.
+    debugPrint('[CAUCE] Provisionamiento de energía no aplica: ${e.code}');
+  } catch (e) {
+    debugPrint('[CAUCE] No se pudo pedir el provisionamiento de energía: $e');
   }
 }
 

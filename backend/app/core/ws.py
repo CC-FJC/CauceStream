@@ -27,6 +27,7 @@ client then reconnects with its existing backoff and recovers through
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import WebSocket
 
@@ -128,6 +129,26 @@ class DeviceConnectionManager:
 
     def has(self, device_uid: str) -> bool:
         return device_uid in self._connections
+
+    async def wait_for_connection(
+        self, device_uid: str, timeout: float, poll: float = 1.0
+    ) -> bool:
+        """Best-effort bounded wait for the device's live channel.
+
+        A dropped channel is often a transient (network ripple during
+        the standby transition): the client reconnects by itself in
+        seconds. Power commands (and any other send that needs the
+        live channel) call this before failing, so a blip never turns
+        into an instant 409 while the device was about to return.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if device_uid in self._connections:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(poll, remaining))
 
     @property
     def connection_count(self) -> int:

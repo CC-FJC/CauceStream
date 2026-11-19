@@ -181,6 +181,12 @@ class FakePowerExecutor implements PowerExecutor {
 
   @override
   Future<bool> requestDeviceAdmin() async => false;
+
+  @override
+  Future<bool> requestIgnoreBatteryOptimizations() async => false;
+
+  @override
+  Future<bool> requestNotifications() async => false;
 }
 
 Map<String, dynamic> powerCommandJson({
@@ -863,6 +869,36 @@ void main() {
       authorization.update(DeviceAuthorizationStatus.registered);
       await pumpEventQueue();
       expect(connector.calls, 3);
+    });
+
+    test('un heartbeat unreachable NO revoca el canal abierto: un fallo '
+        'de red pasajero no deja al servidor sin cómo despertar',
+        () async {
+      final connector = FakeConnector();
+      final authorization = DeviceAuthorization();
+      authorization.update(DeviceAuthorizationStatus.registered);
+      final gated = gatedService(
+        authorization: authorization,
+        connector: connector,
+      );
+      await pumpEventQueue();
+      expect(gated.isConnected, isTrue);
+
+      // Un beat perdido (la transición a espera ralentiza la red):
+      // el canal vivo es la única vía del servidor para ENCENDER y
+      // no se derriba por un timeout puntual.
+      authorization.update(DeviceAuthorizationStatus.unreachable);
+      await pumpEventQueue();
+      expect(gated.isConnected, isTrue,
+          reason: 'unreachable no revoca un canal abierto');
+      expect(connector.sockets.last.closed, isFalse);
+
+      // Solo un veredicto real del servidor (p. ej. 404 → unknown)
+      // sí cierra el canal.
+      authorization.update(DeviceAuthorizationStatus.unknown);
+      await pumpEventQueue();
+      expect(gated.isConnected, isFalse);
+      expect(connector.sockets.last.closed, isTrue);
     });
 
     test('rechazo de política del handshake: el reintento pende solo del '

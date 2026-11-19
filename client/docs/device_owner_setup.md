@@ -138,3 +138,28 @@ Ajustes > Seguridad > Administradores del dispositivo.
   toque).
 - No despierta un SoC en suspensión profunda; para eso hace falta un
   evento de hardware (WoWLAN, RTC, IR).
+
+## Tablets (ruta P1: sin aprovisionamiento especial)
+
+Las tablets de sala NO se provisionan como Device Owner: llegan, se
+activa modo developer + depuración inalámbrica y se instala el APK.
+Al primer arranque el cliente pide (diálogos del sistema, una vez por
+instalación) lo dos permisos que hacen viable el control de pantalla:
+
+1. **Device Admin clásico** (`ACTION_ADD_DEVICE_ADMIN`): habilita
+   `enterStandby` — primero `goToSleep()` por reflexión y, si el OEM lo
+   bloquea, `lockNow()` (API pública) como plan B.
+2. **Exención de optimización de batería**
+   (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`): en espera (Doze) el
+   cliente conserva red y timers, así el servidor puede despertar la
+   pantalla (`wakeScreen` con wake lock `ACQUIRE_CAUSES_WAKEUP`).
+
+Mientras la pantalla está apagada, el cliente se mantiene vivo por
+sí mismo: el `KeepAliveService` arranca al apagarse la pantalla
+(broadcast `ACTION_SCREEN_OFF`) y se detiene al encenderla si no hay
+web externa abierta. Por eso el heartbeat sigue llegando en espera y el
+chip de la sala muestra "en espera" (en línea + idle) en lugar de
+"desconectado".
+
+En TV ya provisionada como Device Owner, ambos pedidos se saltan
+automáticamente (el cliente detecta las capacidades al arrancar).

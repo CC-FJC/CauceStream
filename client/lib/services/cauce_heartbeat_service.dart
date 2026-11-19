@@ -15,9 +15,12 @@ import 'playback_state.dart';
 ///
 /// El device_uid es el nombre del dispositivo tal como lo expone el SO,
 /// sin normalizar; va URL-encoded en la ruta. El device_state se deriva
-/// del ciclo de vida de la app (resumed -> active; cualquier otro estado
-/// -> idle) y `status` (conectividad) NUNCA se reporta: lo determina el
-/// servidor.
+/// (en Android) del estado real de la PANTALLA (`isInteractive`): una
+/// app pausada porque una web externa está encima sigue `active`
+/// (pantalla y experiencia corriendo); solo pantalla apagada es
+/// `idle`. En plataformas sin el canal nativo (desktop, tests) cae al
+/// ciclo de vida de la app (resumed -> active; resto -> idle). El
+/// `status` (conectividad) NUNCA se reporta: lo determina el servidor.
 ///
 /// El medio en reproducción se reporta en `payload.current_media`
 /// (Media.id entero), leído del [PlaybackState] compartido: solo el
@@ -48,11 +51,14 @@ class CauceHeartbeatService with WidgetsBindingObserver {
     Duration timeout = const Duration(seconds: 5),
     Future<String> Function()? resolveIpAddress,
     Future<String?> Function()? resolveMacAddress,
+    Future<bool?> Function()? resolveIsInteractive,
   })  : _client = client ?? http.Client(),
         _interval = interval,
         _timeout = timeout,
         _resolveIpAddress = resolveIpAddress ?? _localIPv4Address,
-        _resolveMacAddress = resolveMacAddress ?? DeviceIdentity.resolveMacAddress;
+        _resolveMacAddress = resolveMacAddress ?? DeviceIdentity.resolveMacAddress,
+        _resolveIsInteractive =
+            resolveIsInteractive ?? DeviceIdentity.resolveIsInteractive;
 
   /// URL base del servidor (p. ej. http://10.15.1.150:8000).
   final String baseUrl;
@@ -78,6 +84,7 @@ class CauceHeartbeatService with WidgetsBindingObserver {
   final Duration _timeout;
   final Future<String> Function() _resolveIpAddress;
   final Future<String?> Function() _resolveMacAddress;
+  final Future<bool?> Function() _resolveIsInteractive;
 
   /// MAC resuelta una sola vez (la interfaz no cambia en operación);
   /// null si no se pudo determinar: entonces simplemente no se envía.
@@ -121,6 +128,17 @@ class CauceHeartbeatService with WidgetsBindingObserver {
   /// operativo, no conectividad).
   String get deviceState =>
       _lifecycle == AppLifecycleState.resumed ? 'active' : 'idle';
+
+  /// Estado operativo REAL reportado al servidor. En Android manda el
+  /// estado de la pantalla (`isInteractive`): el kiosk pausado por una
+  /// web externa encima sigue estando `active` (la experiencia corre);
+  /// solo una pantalla apagada es `idle`. Sin el canal nativo (desktop,
+  /// tests) decae al ciclo de vida.
+  Future<String> _deviceState() async {
+    final interactive = await _resolveIsInteractive();
+    if (interactive != null) return interactive ? 'active' : 'idle';
+    return deviceState;
+  }
 
   void start() {
     if (_disposed || isRunning) return;
@@ -224,7 +242,7 @@ class CauceHeartbeatService with WidgetsBindingObserver {
       final body = jsonEncode({
         'ip_address': ipAddress,
         if (macAddress != null) 'mac_address': macAddress,
-        'device_state': deviceState,
+        'device_state': await _deviceState(),
         'payload': {
           if (mediaId != null) 'current_media': mediaId,
         },

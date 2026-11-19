@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     # device (the watchdog closes the dead channel after it). Generous
     # default: the client may still be downloading a large media file.
     CAUCE_PLAYBACK_ACK_TIMEOUT_S: float = 30.0
+    # Power commands on a device whose WS channel just dropped (network
+    # ripple, standby transition): bounded wait for the client's own
+    # reconnect before answering 409. 0 disables the wait entirely.
+    CAUCE_POWER_CHANNEL_WAIT_S: float = 30.0
 
     @property
     def media_dir(self) -> Path:

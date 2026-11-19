@@ -76,4 +76,25 @@ class DeviceIdentity {
 
   static bool isValidMac(String mac) =>
       RegExp(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$').hasMatch(mac);
+
+  /// Pantalla encendida (`PowerManager.isInteractive`), según el canal
+  /// nativo.
+  ///
+  /// Es la fuente del `device_state` real del heartbeat: con una web
+  /// externa (Custom Tab) encima la app está pausada, pero la pantalla
+  /// — y la experiencia — siguen activas; en espera es pantalla
+  /// apagada. null en plataformas sin el canal (desktop, tests): el
+  /// heartbeat cae al ciclo de vida.
+  static Future<bool?> resolveIsInteractive() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      return await _channel.invokeMethod<bool>('isInteractive') == true;
+    } on PlatformException catch (e) {
+      debugPrint('[CAUCE] No se pudo leer el estado de pantalla: ${e.message}');
+      return null;
+    } on MissingPluginException {
+      // Canal no disponible (p. ej. en tests): fallback al ciclo de vida.
+      return null;
+    }
+  }
 }

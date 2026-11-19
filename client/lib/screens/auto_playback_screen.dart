@@ -98,6 +98,12 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   /// la X, la asignación sigue vigente y la tarjeta queda en pantalla.
   bool _assignedUrlExternal = false;
 
+  /// La web externa se cerró por orden del servidor pero el cierre
+  /// pudo ser ignorado por un Chrome congelado en espera: un solo
+  /// reintento corre en el próximo resumed (pantalla ya despierta) y
+  /// libera la marca. Ver [_closeExternalUrlIfOpen].
+  bool _externalCloseRetryOnResume = false;
+
   /// Completers de carga pendientes por URL asignada (modo `url` con
   /// WebView in-app): el `showUrl` espera a que la web confirme en
   /// pantalla antes de devolver true.
@@ -126,9 +132,14 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed &&
-        _mode == _DisplayMode.assignedUrl &&
-        _assignedUrlExternal) {
+    if (state != AppLifecycleState.resumed) return;
+    // Cierre diferido de la web externa: en espera el Chrome
+    // congelado puede haber ignorado el close original; ahora que
+    // el sistema lo despertó, reintenta una única vez.
+    if (_externalCloseRetryOnResume) {
+      unawaited(_didResumeExternalCloseRetry());
+    }
+    if (_mode == _DisplayMode.assignedUrl && _assignedUrlExternal) {
       // El mediador volvió al kiosk con el medio externo asignado (lo
       // más común: cerró la web con la X del Custom Tab o el gesto
       // atrás, sin orden nueva del servidor). La asignación sigue
@@ -162,11 +173,40 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   Future<void> _closeExternalUrlIfOpen() async {
     if (!_assignedUrlExternal) return;
     _assignedUrlExternal = false;
+    // El cierre puede ser ignorado por un Chrome congelado (el
+    // freezer suspende su proceso en espera): se reintenta al volver a
+    // resumed, cuando el sistema ya lo descongeló.
+    _externalCloseRetryOnResume = true;
     try {
       await _deviceChannel.invokeMethod('stopKeepAlive');
       await custom_tabs.closeCustomTabs();
     } catch (e) {
       debugPrint('[CAUCE] No se pudo cerrar la web externa: $e');
+    }
+  }
+
+  /// Garantiza que sea el kiosk lo que está encima del task aunque la
+  /// Custom Tab zombi de una experiencia anterior siga viva: la trae
+  /// al frente (REORDER_TO_FRONT). El cierre de la zombie queda
+  /// cubierto por el reintento en [_didResumeExternalCloseRetry].
+  Future<void> _assertKioskSurface() async {
+    try {
+      await _deviceChannel.invokeMethod('reorderKioskToFront');
+    } catch (e) {
+      debugPrint('[CAUCE] No se pudo traer el kiosk al frente: $e');
+    }
+  }
+
+  /// Reintento único del cierre de la web externa: corre en el
+  /// primer resumed posterior (p. ej. al encender la pantalla) — el
+  /// Chrome ya descongelado procesa el close que en espera ignoró.
+  Future<void> _didResumeExternalCloseRetry() async {
+    _externalCloseRetryOnResume = false;
+    try {
+      await custom_tabs.closeCustomTabs();
+      debugPrint('[CAUCE] Reintento de cierre de web externa aplicado');
+    } catch (e) {
+      debugPrint('[CAUCE] Falló el reintento de cierre de web externa: $e');
     }
   }
 
@@ -203,6 +243,9 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   Future<bool> showImage(File file, AssignmentMedia media) async {
     final gen = ++_displayGen;
     await _closeExternalUrlIfOpen();
+    // Si una Custom Tab zombie quedó viva (cierre ignorado), el
+    // kiosk con la imagen debe ser lo que se vea encima.
+    unawaited(_assertKioskSurface());
     try {
       // Confirma que la imagen decodifica ANTES de quitar el medio
       // actual de pantalla.
@@ -230,6 +273,8 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   Future<bool> showVideo(File file, AssignmentMedia media) async {
     final gen = ++_displayGen;
     await _closeExternalUrlIfOpen();
+    // Custom Tab zombie: el video del kiosk manda en superficie.
+    unawaited(_assertKioskSurface());
     try {
       final ctrl = VideoPlayerController.file(file);
       await ctrl.initialize();
@@ -267,7 +312,12 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
     if (_disposed || gen != _displayGen) return false;
     _stopVideo();
     await _closeExternalUrlIfOpen();
-
+    if (_disposed || gen != _displayGen) return false;
+    // El modo webview corre en nuestra activity: una Custom Tab
+    // zombie no puede taparla. (La rama external de abajo abre una
+    // pestaña nueva que queda por encima de este reorden, que es
+    // exactamente lo que debe verse.)
+    unawaited(_assertKioskSurface());
     // Asignado como 'external': la web (p. ej. webAR con cámara que
     // el WebView in-app no captura en este dispositivo) abre en una
     // pestaña fullscreen de Chrome por encima del kiosk. El cliente
@@ -344,6 +394,8 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
     final gen = ++_displayGen;
     await _closeExternalUrlIfOpen();
     if (_disposed || gen != _displayGen) return false;
+    // Custom Tab zombie: el PDF del kiosk manda en superficie.
+    unawaited(_assertKioskSurface());
     _stopVideo();
     _failPendingUrlLoads();
     _disposePdf();
@@ -411,6 +463,8 @@ class _AutoPlaybackScreenState extends State<AutoPlaybackScreen>
   Future<bool> showDefault() async {
     if (_disposed) return false;
     await _closeExternalUrlIfOpen();
+    // Custom Tab zombie: el screensaver del kiosk manda en superficie.
+    unawaited(_assertKioskSurface());
     // Ya en el modo por defecto (screensaver con el logo rebotando).
     if (_mode == _DisplayMode.screensaver) return true;
     // Nueva generación: invalida cargas pendientes de órdenes viejas.

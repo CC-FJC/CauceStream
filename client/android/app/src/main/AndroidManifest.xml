@@ -14,6 +14,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!-- Diálogo único (por instalación) de exención de optimización de
+         batería: mantiene la red y los timers del cliente durante la
+         espera con pantalla apagada (Doze no le corta el canal). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- ENCENDER pantalla desde espera: One UI cancela el encendido de
+         apps sin notificaciones habilitadas ("Screen__On : Cancel"). Se
+         pide el permiso de turno una vez (API 33+). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Android TV requirement -->
     <uses-feature
         android:name="android.hardware.touchscreen"
@@ -52,6 +62,17 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Activity desechable de ENCENDER: Android 14+ ignora los
+             wake locks clásicos para targetSdk 34+; el sistema solo
+             enciende la pantalla al lanzar una activity con
+             setTurnScreenOn. No pinta nada: despierta y termina. -->
+        <activity
+            android:name=".WakeActivity"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!-- Device Admin: necesario para que la app pueda ser Device
              Owner (aprovisionamiento por ADB/QR) y entonces apagar la

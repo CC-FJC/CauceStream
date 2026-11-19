@@ -98,13 +98,21 @@ class RevisionGate {
 ///
 /// Autorización de conexión: con [authorization] inyectada (la
 /// producción siempre lo hace), el canal solo se abre cuando el
-/// heartbeat confirmó el registro (`registered`). Cualquier otra
-/// transición del estado de autorización cierra el canal activo y
-/// deja inertes los reintentos pendientes hasta que un heartbeat
-/// vuelva a confirmar el registro. El rechazo del handshake se
-/// loguea con su motivo (p. ej. close 1008) y la recuperación
-/// depende siempre del veredicto del heartbeat, no del propio fallo.
+/// heartbeat confirmó el registro (`registered`). Las transiciones
+/// `pending`, `unknown` o `invalid` cierran el canal activo y dejan
+/// inertes los reintentos pendientes hasta que un heartbeat vuelva a
+/// confirmar el registro. `unreachable` NO cierra: es un fallo de red
+/// pasajero (el beat que se pierde en la transición a espera) y
+/// derribarlo por eso deja al servidor unos segundos sin forma de
+/// despertar el dispositivo. El rechazo del handshake se loguea con
+/// su motivo (p. ej. close 1008) y la recuperación depende siempre
+/// del veredicto del heartbeat, no del propio fallo.
 class PlaybackSocketService {
+  /// Tope del handshake del WS (ver [_connect]): en espera el radio
+  /// puede dejar un intento a medias (TCP vivo, upgrade congelado) y
+  /// el future quedaría pendiente para siempre.
+  static const Duration hsTimeout = Duration(seconds: 12);
+
   PlaybackSocketService({
     required this.baseUrl,
     required this.deviceUid,
@@ -273,7 +281,12 @@ class PlaybackSocketService {
 
   /// Reacciona a las transiciones del estado de autorización:
   /// `registered` abre el canal (si el servicio está en marcha);
-  /// cualquier otro estado lo cierra y deja inertes los reintentos.
+  /// `pending`, `unknown` o `invalid` lo cierran y dejan inertes los
+  /// reintentos. `unreachable` NO revoca un canal ya abierto: es un
+  /// fallo de red pasajero (p. ej. el beat que se pierde en la
+  /// transición a espera) y cerrar por eso deja al servidor ~10 s
+  /// sin forma de despertar la pantalla; si el socket de verdad
+  /// murió, el TCP lo reporta y el ciclo normal reconecta.
   void _onAuthorizationChanged(DeviceAuthorizationStatus status) {
     if (_disposed) return;
     if (status == DeviceAuthorizationStatus.registered) {
@@ -284,6 +297,12 @@ class PlaybackSocketService {
         );
         unawaited(_connect());
       }
+      return;
+    }
+    if (status == DeviceAuthorizationStatus.unreachable) {
+      // Un beat perdido no derroca la sesión: el canal abierto es la
+      // única vía del servidor para ENCENDER. Solo el veredicto real
+      // del servidor (pendiente/inválido/desconocido) cierra.
       return;
     }
     // Revocación: canal cerrado, eventos en vuelo invalidados (la
@@ -326,7 +345,13 @@ class PlaybackSocketService {
       final headers = <String, String>{
         if (deviceKey != null) 'X-Device-Key': deviceKey!,
       };
-      final socket = await _connector(wsUri(baseUrl, deviceUid), headers);
+      // Tope de handshake: en espera el canal radio puede tragar el
+      // intento a medias (TCP vivo, upgrade congelado) y el future
+      // queda pendiente para siempre: sin this, un arranque en
+      // espera deja al controlable mudo minutos o para siempre. El
+      // timeout cae al catch y el backoff reintenta de verdad.
+      final socket = await _connector(wsUri(baseUrl, deviceUid), headers)
+          .timeout(hsTimeout);
       if (_disposed || generation != _generation) {
         await socket.close();
         return;

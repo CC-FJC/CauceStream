@@ -37,6 +37,19 @@ abstract class PowerExecutor {
   /// flujo se lanzó. Device Owner requiere aprovisionamiento por ADB/QR
   /// (ver client/docs/device_owner_setup.md).
   Future<bool> requestDeviceAdmin();
+
+  /// Pide (diálogo único del sistema, Android) eximir la app de la
+  /// optimización de batería: en espera conserva red y timers para
+  /// que el servidor pueda despertar la pantalla. true si ya estaba
+  /// eximida o el flujo se lanzó. Plataformas sin canal →
+  /// [PowerErrorCodes.platformUnsupported].
+  Future<bool> requestIgnoreBatteryOptimizations();
+
+  /// Pide (diálogo único del sistema, Android 13+) el permiso de
+  /// notificaciones: One UI cancela el encendido de pantalla de apps
+  /// sin notificaciones habilitadas. true si ya están habilitadas o el
+  /// diálogo se lanzó.
+  Future<bool> requestNotifications();
 }
 
 /// Capacidades de energía que reporta la plataforma nativa
@@ -104,6 +117,13 @@ class MethodChannelPowerExecutor implements PowerExecutor {
 
   @override
   Future<bool> requestDeviceAdmin() => _invokeBool('requestDeviceAdmin');
+
+  @override
+  Future<bool> requestIgnoreBatteryOptimizations() =>
+      _invokeBool('requestIgnoreBatteryOptimizations');
+
+  @override
+  Future<bool> requestNotifications() => _invokeBool('requestNotifications');
 
   @override
   Future<PowerCapabilities> capabilities() async {

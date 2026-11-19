@@ -247,6 +247,90 @@ void main() {
     service.dispose();
   });
 
+  group('device_state por estado de pantalla (Android)', () {
+    test('pantalla encendida es active aunque la app esté pausada '
+        '(web externa encima)', () async {
+      final states = <String>[];
+      final client = MockClient((request) async {
+        states.add(
+          (jsonDecode(request.body) as Map<String, dynamic>)['device_state']
+              as String,
+        );
+        return okResponse();
+      });
+      final service = CauceHeartbeatService(
+        baseUrl: 'http://server:8000',
+        deviceUid: 'SALA 1',
+        client: client,
+        resolveIpAddress: () async => '10.15.1.99',
+        resolveIsInteractive: () async => true,
+      );
+
+      service.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await service.sendHeartbeat();
+
+      // La experiencia externa corre EN pantalla: el dispositivo está
+      // activo aunque el kiosk (la app) esté pausado debajo.
+      expect(states.last, 'active');
+      service.dispose();
+    });
+
+    test('pantalla apagada es idle aunque la app esté en primer plano',
+        () async {
+      final states = <String>[];
+      final client = MockClient((request) async {
+        states.add(
+          (jsonDecode(request.body) as Map<String, dynamic>)['device_state']
+              as String,
+        );
+        return okResponse();
+      });
+      final service = CauceHeartbeatService(
+        baseUrl: 'http://server:8000',
+        deviceUid: 'SALA 1',
+        client: client,
+        resolveIpAddress: () async => '10.15.1.99',
+        resolveIsInteractive: () async => false,
+      );
+
+      // En espera: pantalla apagada es idle, sin importar el ciclo de
+      // vida de la app (el guardián de pantalla sigue latiendo).
+      await service.sendHeartbeat();
+      expect(states.last, 'idle');
+
+      service.dispose();
+    });
+
+    test('sin canal de pantalla decae al ciclo de vida (desktop/tests)',
+        () async {
+      final states = <String>[];
+      final client = MockClient((request) async {
+        states.add(
+          (jsonDecode(request.body) as Map<String, dynamic>)['device_state']
+              as String,
+        );
+        return okResponse();
+      });
+      final service = CauceHeartbeatService(
+        baseUrl: 'http://server:8000',
+        deviceUid: 'SALA 1',
+        client: client,
+        resolveIpAddress: () async => '10.15.1.99',
+        resolveIsInteractive: () async => null,
+      );
+
+      service.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await service.sendHeartbeat();
+      expect(states.last, 'idle');
+
+      service.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await service.sendHeartbeat();
+      expect(states.last, 'active');
+
+      service.dispose();
+    });
+  });
+
   group('veredictos de autorización (DeviceAuthorization)', () {
     CauceHeartbeatService build(
       http.Client client,

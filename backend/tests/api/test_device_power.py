@@ -154,16 +154,54 @@ async def test_power_failure_is_200_with_success_false(client, admin):
     assert "no acepta ADB" in body["detail"]
 
 
-async def test_power_websocket_fallback_409_without_channel(client, admin):
+async def test_power_websocket_fallback_409_without_channel(
+    client, admin, monkeypatch
+):
     token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
     await register_device(client, token, device_type="screen")  # sin controller nativo
     registry = PowerControllerRegistry()
     registry.set_fallback(WebSocketPowerController)
     use_registry(registry)
 
+    # Sin canal: la espera acotada de reconexión también vence ya.
+    monkeypatch.setattr(get_settings(), "CAUCE_POWER_CHANNEL_WAIT_S", 0.05)
+
     response = await power(client, token, "off")
     assert response.status_code == 409
     assert "WebSocket" in response.json()["detail"]
+
+
+async def test_power_waits_for_channel_reconnect_then_delivers(
+    client, admin, monkeypatch
+):
+    """El canal caído suele ser una ventana pasajera: el endpoint espera
+    la reconexión propia del cliente en vez de tropezar con un 409."""
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token, device_type="screen")
+    registry = PowerControllerRegistry()
+    registry.set_fallback(WebSocketPowerController)
+    use_registry(registry)
+
+    # Espera holgada para la fake; el cliente "reconecta" a los 0.3 s.
+    monkeypatch.setattr(get_settings(), "CAUCE_POWER_CHANNEL_WAIT_S", 2.0)
+    ws = FakeWS()
+
+    async def reconnect_soon():
+        await asyncio.sleep(0.3)
+        await connection_manager.connect(UID, ws)
+
+    reconnect_task = asyncio.create_task(reconnect_soon())
+    try:
+        response = await power(client, token, "on")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["method"] == "websocket"
+        assert body["delivered"] is True
+        assert '"power.command"' in ws.sent[-1]
+        assert '"action": "on"' in ws.sent[-1]
+    finally:
+        await reconnect_task
+        connection_manager.disconnect(UID, ws)
 
 
 async def test_power_websocket_fallback_delivers_when_channel_open(client, admin):

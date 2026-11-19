@@ -319,22 +319,33 @@ async def send_power_command(
     registered for the device's `type`. Native controllers (e.g. ADB for
     Android TV boxes) run server-side against the IP the device last
     reported in its heartbeat; types without a native controller fall
-    back to the device's live WebSocket channel (409 while it is down).
+    back to the device's live WebSocket channel (a bounded wait for the
+    client's own reconnect, then 409).
 
     The response reports the attempt (`method`, `executed`, `success`,
     `detail`), never the authoritative state: the device keeps reporting
     `device_state` through its heartbeats, and that is what the UI must
-    reflect."""
+    reflect.
+    """
     device = await service.get_device(device_uid)  # 404 through the global handler
+    settings = get_settings()
 
     controller = registry.for_device(device)
     if controller.requires_live_channel and not connection_manager.has(device_uid):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Device has no open WebSocket channel; power commands for this device type are delivered through it",
+        # El canal caído suele ser una ventana pasajera (el cliente
+        # reconecta solo en segundos tras un fallo de red). Esperamos
+        # acotadamente a que vuelva antes de declarar el 409: un blip
+        # no debe traducirse en "no funciona".
+        settings = get_settings()
+        channel_back = await connection_manager.wait_for_connection(
+            device_uid, timeout=settings.CAUCE_POWER_CHANNEL_WAIT_S
         )
+        if not channel_back:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Device has no open WebSocket channel; power commands for this device type are delivered through it",
+            )
 
-    settings = get_settings()
     try:
         result = await asyncio.wait_for(
             controller.turn_on(device) if payload.action == "on" else controller.turn_off(device),
