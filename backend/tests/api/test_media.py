@@ -4,7 +4,10 @@ persistence of files across service restarts."""
 
 import os
 
+import httpx
+
 from app.core.config import Settings
+from app.main import app
 from app.models import Media
 from tests.conftest import (
     ADMIN_EMAIL,
@@ -275,9 +278,16 @@ async def test_db_failure_after_save_cleans_file(client, admin, db_session, monk
 
     monkeypatch.setattr(db_session, "commit", _boom)
 
-    response = await upload(
-        client, token, filename="ghost.png", content=PNG_BYTES, mime="image/png"
-    )
+    # The test client propagates the app's exceptions (httpx default):
+    # here we want to see the 500 that the user receives when the DB
+    # fails mid-commit, so the exception stays inside the transport.
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as failing:
+        response = await upload(
+            failing, token, filename="ghost.png", content=PNG_BYTES, mime="image/png"
+        )
     assert response.status_code == 500
     assert stored_files() == []  # the saved file was rolled back/cleaned
 

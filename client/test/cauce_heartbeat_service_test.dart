@@ -115,6 +115,113 @@ void main() {
     service.dispose();
   });
 
+  group('payload.power_caps (capacidades de energía)', () {
+    test('se reportan cuando el proveedor las resuelve', () async {
+      Map<String, dynamic>? capturedBody;
+      final client = MockClient((request) async {
+        capturedBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return okResponse();
+      });
+
+      final service = CauceHeartbeatService(
+        baseUrl: 'http://10.15.1.150:8000',
+        deviceUid: 'SALA 1',
+        client: client,
+        resolveIpAddress: () async => '10.15.1.99',
+        resolvePowerCaps: () async => <String, Object?>{
+          'can_wake': true,
+          'can_standby': true,
+          'device_owner': false,
+          'admin_active': true,
+        },
+      );
+
+      await service.sendHeartbeat();
+
+      // Tal cual el mapa nativo de capacidades: el servidor decide con
+      // can_standby/can_wake qué acción puede ejecutar por WS.
+      expect(capturedBody!['payload']['power_caps'],
+          {'can_wake': true, 'can_standby': true,
+           'device_owner': false, 'admin_active': true});
+      service.dispose();
+    });
+
+    test('sin proveedor la clave se omite (desktop/legacy)', () async {
+      Map<String, dynamic>? capturedBody;
+      final client = MockClient((request) async {
+        capturedBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return okResponse();
+      });
+
+      final service = CauceHeartbeatService(
+        baseUrl: 'http://10.15.1.150:8000',
+        deviceUid: 'SALA 1',
+        client: client,
+        resolveIpAddress: () async => '10.15.1.99',
+      );
+
+      await service.sendHeartbeat();
+
+      expect(capturedBody!['payload'].containsKey('power_caps'), isFalse);
+      service.dispose();
+    });
+
+    test('un proveedor que lanza jamás rompe el latido', () async {
+      Map<String, dynamic>? capturedBody;
+      final client = MockClient((request) async {
+        capturedBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return okResponse();
+      });
+
+      final service = CauceHeartbeatService(
+        baseUrl: 'http://10.15.1.150:8000',
+        deviceUid: 'SALA 1',
+        client: client,
+        resolveIpAddress: () async => '10.15.1.99',
+        resolvePowerCaps: () async => throw Exception('boom'),
+      )..start();
+
+      await service.firstHeartbeat;
+
+      // El latido salió igual (no se marca unreachable) y sin la clave.
+      expect(capturedBody, isNotNull);
+      expect(capturedBody!['payload'].containsKey('power_caps'), isFalse);
+      expect(service.isRunning, isTrue); // sigue latiendo para el próximo
+      service.dispose();
+    });
+
+    test('cambian entre latidos (aprovisionamiento a mitad de arranque)',
+        () async {
+      Map<String, dynamic>? capturedBody;
+      final client = MockClient((request) async {
+        capturedBody = jsonDecode(request.body) as Map<String, dynamic>;
+        return okResponse();
+      });
+
+      var adminActive = false;
+      final service = CauceHeartbeatService(
+        baseUrl: 'http://10.15.1.150:8000',
+        deviceUid: 'SALA 1',
+        client: client,
+        resolveIpAddress: () async => '10.15.1.99',
+        resolvePowerCaps: () async => <String, Object?>{
+          'can_standby': adminActive,
+          'admin_active': adminActive,
+        },
+      );
+
+      await service.sendHeartbeat();
+      expect(capturedBody!['payload']['power_caps']['can_standby'], false);
+
+      // El administrador activa Device Admin entre latidos: el servidor
+      // ve la nueva capacidad 10 s después, sin reiniciar nada.
+      adminActive = true;
+      await service.sendHeartbeat();
+      expect(capturedBody!['payload']['power_caps']['can_standby'], true);
+      service.dispose();
+    });
+  });
+
   test('404 (dispositivo aún no registrado) no lanza', () async {
     final client = MockClient((request) async => http.Response('{}', 404));
     final service = CauceHeartbeatService(

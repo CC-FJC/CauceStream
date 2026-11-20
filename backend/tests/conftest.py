@@ -14,6 +14,10 @@ import tempfile
 os.environ.setdefault("BCRYPT_ROUNDS", "4")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-0123456789abcdef")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
+# Device-key auth: who needs it pins it on the settings object
+# (test_device_auth.py). A secret reaching from the local .env would
+# 401 every generic heartbeat/WS test that does not send X-Device-Key.
+os.environ.pop("CAUCE_DEVICE_SECRET", None)
 
 # Media storage: isolated temp dir and a tiny upload limit so oversize
 # tests are cheap. Never the real backend/data/media directory.
@@ -28,11 +32,18 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_session
+from app.core.config import get_settings
 from app.core.security import hash_password
 from app.core.seed import seed_initial_data
 from app.core.database import Base
 from app.main import app
 from app.models import Role, User
+
+# El settings de pydantic lee el .env file (no solo el entorno del
+# proceso): la clave de dispositivo se neutraliza una vez sobre el
+# objeto para que los tests genéricos sean herméticos en cualquier
+# despliegue. Quien la necesita (test_device_auth.py) la fija por test.
+get_settings().CAUCE_DEVICE_SECRET = ""
 
 ADMIN_EMAIL = "admin-user@example.com"
 ADMIN_PASSWORD = "1234"

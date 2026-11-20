@@ -43,6 +43,10 @@ class FakeWebSocket:
         self.closed: tuple[int, str | None] | None = None
         self.sent: list[dict] = []
         self._incoming: asyncio.Queue = asyncio.Queue()
+        # El endpoint lee el handshake X-Device-Key de `headers` (mismo
+        # contrato que starlette.WebSocket). Vacío = clave ausente: con
+        # el secret neutralizado de tests (conftest) el handshake pasa.
+        self.headers: dict[str, str] = {}
 
     # --- server side of the socket ---
 

@@ -105,6 +105,22 @@ Future<PlaybackSocketService?> _startDeviceServices() async {
     deviceKey: deviceKey,
     playbackState: playbackState,
     authorization: authorization,
+    resolvePowerCaps: () async {
+      // Capacidades reales reportadas cada latido: el servidor prefiere
+      // el canal WS para power cuando la app puede ejecutarlo (Device
+      // Admin/Owner). Plataformas sin canal nativo → null (sin clave).
+      try {
+        final caps = await powerExecutor.capabilities();
+        return <String, Object?>{
+          'can_wake': caps.canWake,
+          'can_standby': caps.canStandby,
+          'device_owner': caps.deviceOwner,
+          'admin_active': caps.adminActive,
+        };
+      } on PowerExecutorException {
+        return null;
+      }
+    },
   )..start();
   await heartbeat.firstHeartbeat;
   debugPrint(

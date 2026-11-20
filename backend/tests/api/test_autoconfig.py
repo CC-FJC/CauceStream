@@ -237,7 +237,10 @@ async def test_duplicate_registration_conflict(client, admin):
 
 async def test_disable_stops_discovery_and_clears_pending(client, admin, db_session):
     token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
-    await register_device(client, token)
+    # Dispositivo registrado: uid DISTINTO al que se usará como
+    # desconocido (con el mismo uid ya no habría descubrimiento: la
+    # tabla devices tiene prioridad sobre los pendientes).
+    await register_device(client, token, uid="tablet-menu-registrada")
 
     await enable_autoconfig(client, token)
     assert (await heartbeat_unknown(client)).status_code == 202
@@ -255,6 +258,6 @@ async def test_disable_stops_discovery_and_clears_pending(client, admin, db_sess
     assert response.status_code == 404
 
     # Registered devices are untouched and keep heartbeating normally.
-    response = await heartbeat_unknown(client)
+    response = await heartbeat_unknown(client, uid="tablet-menu-registrada")
     assert response.status_code == 200
     assert response.json()["status"] == "online"

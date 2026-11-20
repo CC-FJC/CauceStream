@@ -1,6 +1,9 @@
 package com.cauce.cauce_stream
 
 import android.app.admin.DevicePolicyManager
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.app.UiModeManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -11,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Log
 import android.view.WindowManager
 import java.net.NetworkInterface
 import io.flutter.embedding.android.FlutterActivity
@@ -21,6 +25,11 @@ class MainActivity : FlutterActivity() {
 
     private val channelName = "cauce_stream/device"
     private val powerChannelName = "cauce.power/power"
+
+    /// Tag de las trazas nativas del canal de energía (logcat -s CAUCE):
+    /// qué ruta real (goToSleep/lockNow/wakeUp/activity) corre en cada
+    /// dispositivo contractual.
+    private val powerTag = "CAUCE-POWER"
 
     /// Receptor de encendido/apagado de pantalla: una pantalla apagada
     /// (standby manual o power.command) activa el guardián que mantiene
@@ -209,10 +218,12 @@ class MainActivity : FlutterActivity() {
             val goToSleep = DevicePolicyManager::class.java
                 .getMethod("goToSleep", Long::class.javaPrimitiveType)
             goToSleep.invoke(dpm, 0L)
+            Log.i(powerTag, "standby: goToSleep() por reflexión aplicado")
             return true
         } catch (e: Exception) {
             // NoSuchMethodException (OEM sin el método oculto),
             // SecurityException (el servicio lo rechazó): cae al plan B.
+            Log.i(powerTag, "standby: goToSleep() rechazado (${e.javaClass.simpleName}); plan B lockNow()")
         }
         // 2) Plan B: lockNow() (API pública del Device Admin clásico)
         //    bloquea el dispositivo y apaga la pantalla. El kiosk no
@@ -220,6 +231,7 @@ class MainActivity : FlutterActivity() {
         if (adminActive) {
             return try {
                 dpm.lockNow()
+                Log.i(powerTag, "standby: lockNow() aplicado")
                 true
             } catch (e: Exception) {
                 false
@@ -263,13 +275,27 @@ class MainActivity : FlutterActivity() {
         val owner = dpm.isDeviceOwnerApp(packageName)
         val adminActive = dpm.isAdminActive(adminComponent)
         return mapOf(
-            // Wake lock con ACQUIRE_CAUSES_WAKEUP es API pública: encender
-            // la pantalla siempre está soportado.
-            "can_wake" to true,
+            // Encender la PANTALLA solo en dispositivos no-TV: los paneles
+            // de televisión solo despiertan por input de hardware
+            // (control, CEC, ADB) y ninguna ruta app sirve (verificado
+            // en TCL Android 12: wakelock clásico, WakeActivity,
+            // reflexión wakeUp() y hasta alarma AlarmClock — nada). El
+            // servidor usa esta capability para decidir: can_wake=false
+            // -> enciende por ADB (keyevent WAKEUP), que sí funciona.
+            // can_standby sí es real en TV con Device Admin (lockNow).
+            "can_wake" to !isTelevisionUi(),
             "can_standby" to (owner || adminActive),
             "device_owner" to owner,
             "admin_active" to adminActive,
         )
+    }
+
+    /// ¿Corre este cliente en una TV (UI leanback)? Google TV / Android TV
+    /// reportan UI_MODE_TYPE_TELEVISION; con control remoto, sin touch.
+    private fun isTelevisionUi(): Boolean {
+        val uiModeManager = getSystemService(UI_MODE_SERVICE) as UiModeManager
+        return uiModeManager.currentModeType ==
+            android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
     }
 
     /// Lanza el diálogo del sistema para activar la app como Device Admin
@@ -351,6 +377,25 @@ class MainActivity : FlutterActivity() {
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         val alreadyInteractive = powerManager.isInteractive
 
+        // 1) Ruta ideal en TV/box: PowerManager.wakeUp(long) @hide, la
+        //    contraparte simétrica del goToSleep() de enterStandby. En
+        //    móviles targetSdk 34+ la vía pública (WakeActivity) basta,
+        //    pero en varios Android TV el lanzamiento de la activity en
+        //    background queda bloqueado (BAL) o ignorado y el panel no
+        //    enciende: la reflexión directa es la que despierta ahí.
+        if (!alreadyInteractive) {
+            try {
+                val wakeUp = PowerManager::class.java
+                    .getMethod("wakeUp", Long::class.javaPrimitiveType)
+                wakeUp.invoke(powerManager, System.currentTimeMillis())
+                Log.i(powerTag, "wake: wakeUp() por reflexión aplicado")
+            } catch (e: Exception) {
+                Log.i(powerTag, "wake: wakeUp() por reflexión no disponible (${e.javaClass.simpleName}); sigue la vía de activity")
+            }
+        } else {
+            Log.i(powerTag, "wake: pantalla ya encendida (idempotente)")
+        }
+
         if (!alreadyInteractive) {
             @Suppress("DEPRECATION")
             val wakeLock = powerManager.newWakeLock(
@@ -377,7 +422,39 @@ class MainActivity : FlutterActivity() {
                 )
             }
             if (!alreadyInteractive) {
+                scheduleWakeAlarm()
+            }
+        }
+    }
+
+    /// Enciende el panel con el patrón de las alarmas: AlarmManager
+    /// setAlarmClock dispara WakeActivity (setTurnScreenOn). En varios
+    /// Android TV el startActivity directo desde background (pantalla
+    /// apagada) es bloqueado o ignorado, mientras que la alarma de
+    /// usuario es por diseño visible: el sistema TV sí enciende la
+    /// pantalla para ella. Fallback: startActivity directo.
+    private fun scheduleWakeAlarm() {
+        try {
+            val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+            val intent = Intent(this, WakeActivity::class.java)
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val fireAt = android.os.SystemClock.elapsedRealtime() + 300
+            alarmManager.setAlarmClock(
+                AlarmManager.AlarmClockInfo(fireAt, null),
+                pendingIntent,
+            )
+            Log.i(powerTag, "wake: alarma AlarmClock programada (+300 ms) -> WakeActivity")
+        } catch (e: Exception) {
+            Log.i(powerTag, "wake: alarma AlarmClock falló (${e.javaClass.simpleName}); startActivity directo")
+            try {
                 startActivity(Intent(this, WakeActivity::class.java))
+            } catch (e: Exception) {
+                Log.i(powerTag, "wake: startActivity directo también falló (${e.javaClass.simpleName})")
             }
         }
     }

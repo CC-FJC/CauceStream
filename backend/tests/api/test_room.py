@@ -164,7 +164,10 @@ class RecordingPowershell:
         self.commands: list[str] = []
         self.output = output
 
-    async def __call__(self, service_self, command: str) -> str:
+    # Sustituye al método de instancia mediante atributo de clase: no
+    # es descriptor, así que la llamada llega como self._run_powershell
+    # ( comando ) sin la instancia de RoomPowerService.
+    async def __call__(self, command: str) -> str:
         self.commands.append(command)
         return self.output
 

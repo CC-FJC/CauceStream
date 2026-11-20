@@ -16,6 +16,7 @@ registered devices, and it never replaces the heartbeat - liveness and
 import asyncio
 import json
 import logging
+from dataclasses import replace
 
 from fastapi import (
     APIRouter,
@@ -37,7 +38,7 @@ from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
 from app.core.device_auth import require_device_key, verify_device_key
 from app.core.exceptions import NotFoundError
-from app.power.base import PowerControllerRegistry
+from app.power.base import DevicePowerController, PowerControllerRegistry
 from app.power.websocket import WebSocketPowerController
 from app.core.ws import (
     WSC_INTERNAL_ERROR,
@@ -331,6 +332,26 @@ async def send_power_command(
     settings = get_settings()
 
     controller = registry.for_device(device)
+    # Preferencia WS por capacidad: un dispositivo con controlador
+    # nativo de servidor (p. ej. ADB en google_tv) cuya app reportó en
+    # su heartbeat (payload.power_caps) poder ejecutar esta acción
+    # (Device Admin/Owner activo) prefiere su canal WebSocket vivo: no
+    # depende del paring/puerto ADB y el propio cliente confirma la
+    # ejecución. El controlador nativo queda como rescate dentro de la
+    # misma petición si el WS no entrega (canal roto a mitad).
+    rescue: DevicePowerController | None = None
+    ws_controller: WebSocketPowerController | None = None
+    action_capability = "can_standby" if payload.action == "off" else "can_wake"
+    reported_caps = (device.payload or {}).get("power_caps")
+    if (
+        not controller.requires_live_channel
+        and isinstance(reported_caps, dict)
+        and reported_caps.get(action_capability) is True
+        and connection_manager.has(device_uid)
+    ):
+        ws_controller = WebSocketPowerController()
+        rescue = controller
+        controller = ws_controller
     if controller.requires_live_channel and not connection_manager.has(device_uid):
         # El canal caído suele ser una ventana pasajera (el cliente
         # reconecta solo en segundos tras un fallo de red). Esperamos
@@ -357,11 +378,32 @@ async def send_power_command(
             detail=f"Power command '{payload.action}' timed out after {settings.CAUCE_POWER_TOTAL_TIMEOUT_S}s",
         ) from None
 
-    # command_id/delivered only make sense for the WebSocket fallback.
+    # Rescate: la preferencia WS no entregó (canal roto a mitad de la
+    # petición). Se intenta el controlador nativo del tipo dentro de la
+    # misma llamada y se reporta el resultado del rescate con el
+    # contexto de ambos intentos.
+    if ws_controller is not None and not result.success and rescue is not None:
+        rescue_result = await asyncio.wait_for(
+            rescue.turn_on(device) if payload.action == "on" else rescue.turn_off(device),
+            timeout=settings.CAUCE_POWER_TOTAL_TIMEOUT_S,
+        )
+        result = replace(
+            rescue_result,
+            detail=(
+                f"WS no entregó ({result.detail}); "
+                f"rescate {rescue_result.method}: {rescue_result.detail}"
+            ),
+        )
+        ws_controller = None
+
+    # command_id/delivered only make sense for the WebSocket delivery.
     command_id = None
     delivered = False
-    if isinstance(controller, WebSocketPowerController):
-        command_id = controller.last_command_id
+    ws_used = ws_controller
+    if ws_used is None and isinstance(controller, WebSocketPowerController):
+        ws_used = controller
+    if ws_used is not None and result.method == ws_used.method:
+        command_id = ws_used.last_command_id
         delivered = result.success
 
     return DevicePowerResult(

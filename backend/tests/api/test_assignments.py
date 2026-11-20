@@ -250,7 +250,7 @@ async def test_assign_external_rejected_for_non_url_media(client, admin, db_sess
     video = Media(
         name="Video sala",
         media_type="video",
-        file_path="/tmp/loop.mp4",
+        storage_key="videos/loop.mp4",
         mime_type="video/mp4",
         file_size=10,
     )

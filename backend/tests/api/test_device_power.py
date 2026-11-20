@@ -6,6 +6,7 @@ tests/power/test_registry.py.
 """
 
 import asyncio
+import json
 
 from app.api.deps import get_power_controller_registry
 from app.core.config import get_settings
@@ -219,7 +220,11 @@ async def test_power_websocket_fallback_delivers_when_channel_open(client, admin
         body = response.json()
         assert body["method"] == "websocket"
         assert body["delivered"] is True
-        assert body["command_id"] == 1
+        # command_id: el mismo id que viajó en el mensaje enviado (el
+        # contador es por-dispositivo y su valor absoluto depende de
+        # los tests ya ejecutados en este proceso).
+        sent = json.loads(ws.sent[-1])
+        assert body["command_id"] == sent["command_id"]
         assert '"power.command"' in ws.sent[-1]
     finally:
         connection_manager.disconnect(UID, ws)
@@ -290,3 +295,159 @@ async def test_power_command_timeout_is_504(client, admin, monkeypatch):
     response = await power(client, token, "on")
     assert response.status_code == 504
     assert "timed out" in response.json()["detail"]
+
+
+# --- Preferencia WS por capacidad (payload.power_caps del heartbeat) ---
+
+WS_CAPS = {
+    "can_wake": True,
+    "can_standby": True,
+    "device_owner": False,
+    "admin_active": True,
+}  # TV/box con Device Admin activo: su app puede apagar/encender.
+
+
+class CountingController(DevicePowerController):
+    """Fake del controlador nativo (ADB) que cuenta sus ejecuciones."""
+
+    method = "adb"
+
+    def __init__(self, result: PowerResult):
+        self._result = result
+        self.calls = 0
+
+    async def turn_on(self, device: Device) -> PowerResult:
+        self.calls += 1
+        return self._result
+
+    async def turn_off(self, device: Device) -> PowerResult:
+        self.calls += 1
+        return self._result
+
+
+class BrokenWS(FakeWS):
+    """Canal que revienta al enviar: WS no entrega."""
+
+    async def send_text(self, data: str) -> None:
+        raise RuntimeError("canal roto")
+
+
+async def heartbeat_with_caps(client, uid, caps) -> None:
+    response = await client.post(
+        f"/api/devices/{uid}/heartbeat",
+        json={
+            "ip_address": IP,
+            "device_state": "active",
+            "payload": {"power_caps": caps},
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
+def tv_registry(result: PowerResult) -> tuple[PowerControllerRegistry, CountingController]:
+    registry = PowerControllerRegistry()
+    controller = CountingController(result)
+    registry.register("google_tv", lambda: controller)
+    return registry, controller
+
+
+async def test_power_tv_with_ws_caps_prefers_websocket_over_adb(client, admin):
+    """TV con Device Admin: power.off por su canal WS vivo, sin tocar
+    ADB (el controlador nativo del tipo queda como rescate, no corre)."""
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+    await heartbeat_with_caps(client, UID, WS_CAPS)
+    registry, adb = tv_registry(
+        PowerResult("off", "adb", True, True, "keyevent SLEEP (223) enviado")
+    )
+    use_registry(registry)
+
+    ws = FakeWS()
+    await connection_manager.connect(UID, ws)
+    try:
+        response = await power(client, token, "off")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["method"] == "websocket"
+        assert body["delivered"] is True
+        sent = json.loads(ws.sent[-1])
+        assert body["command_id"] == sent["command_id"]
+        assert '"power.command"' in ws.sent[-1]
+        assert '"action": "off"' in ws.sent[-1]
+        assert adb.calls == 0  # no fue necesario
+    finally:
+        connection_manager.disconnect(UID, ws)
+
+
+async def test_power_tv_with_ws_caps_uses_adb_when_channel_closed(client, admin):
+    """Caps reportadas pero canal cerrado: ADB directo (sin 409, sin
+    espera): el prefijo WS solo tiene sentido con canal vivo."""
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+    await heartbeat_with_caps(client, UID, WS_CAPS)
+    registry, adb = tv_registry(
+        PowerResult("off", "adb", True, True, "keyevent SLEEP (223) enviado")
+    )
+    use_registry(registry)
+
+    response = await power(client, token, "off")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["method"] == "adb"
+    assert adb.calls == 1
+
+
+async def test_power_tv_ws_delivery_failure_rescues_adb(client, admin):
+    """El WS prefiere pero no entrega (canal roto a mitad): el controlador
+    nativo corre como rescate en la misma petición y el resultado lo
+    documenta."""
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+    await heartbeat_with_caps(client, UID, WS_CAPS)
+    registry, adb = tv_registry(
+        PowerResult("off", "adb", True, True, "keyevent SLEEP (223) enviado")
+    )
+    use_registry(registry)
+
+    ws = BrokenWS()
+    await connection_manager.connect(UID, ws)
+    try:
+        response = await power(client, token, "off")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["method"] == "adb"
+        assert body["success"] is True
+        assert body["command_id"] is None
+        assert body["delivered"] is False
+        assert "rescate adb" in body["detail"]
+        assert adb.calls == 1
+    finally:
+        connection_manager.disconnect(UID, ws)
+
+
+async def test_power_tv_capability_not_declared_uses_adb(client, admin):
+    """Caps sin can_standby (sin Device Admin): ni con el canal abierto
+    se prefiere WS para apagar; ADB es el camino del tipo."""
+    token = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    await register_device(client, token)
+    await heartbeat_with_caps(
+        client, UID, {**WS_CAPS, "can_standby": False, "admin_active": False}
+    )
+    registry, adb = tv_registry(
+        PowerResult("off", "adb", True, True, "keyevent SLEEP (223) enviado")
+    )
+    use_registry(registry)
+
+    ws = FakeWS()
+    await connection_manager.connect(UID, ws)
+    try:
+        response = await power(client, token, "off")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["method"] == "adb"
+        assert body["command_id"] is None
+        assert adb.calls == 1
+        assert ws.sent == []  # el WS ni se intentó
+    finally:
+        connection_manager.disconnect(UID, ws)
+

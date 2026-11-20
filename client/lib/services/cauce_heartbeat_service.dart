@@ -52,13 +52,15 @@ class CauceHeartbeatService with WidgetsBindingObserver {
     Future<String> Function()? resolveIpAddress,
     Future<String?> Function()? resolveMacAddress,
     Future<bool?> Function()? resolveIsInteractive,
+    Future<Map<String, Object?>?> Function()? resolvePowerCaps,
   })  : _client = client ?? http.Client(),
         _interval = interval,
         _timeout = timeout,
         _resolveIpAddress = resolveIpAddress ?? _localIPv4Address,
         _resolveMacAddress = resolveMacAddress ?? DeviceIdentity.resolveMacAddress,
         _resolveIsInteractive =
-            resolveIsInteractive ?? DeviceIdentity.resolveIsInteractive;
+            resolveIsInteractive ?? DeviceIdentity.resolveIsInteractive,
+        _resolvePowerCaps = resolvePowerCaps;
 
   /// URL base del servidor (p. ej. http://10.15.1.150:8000).
   final String baseUrl;
@@ -85,6 +87,10 @@ class CauceHeartbeatService with WidgetsBindingObserver {
   final Future<String> Function() _resolveIpAddress;
   final Future<String?> Function() _resolveMacAddress;
   final Future<bool?> Function() _resolveIsInteractive;
+
+  /// Capacidades de energía de la plataforma (PowerExecutor). null en
+  /// plataformas sin canal nativo: la clave simplemente no se envía.
+  final Future<Map<String, Object?>?> Function()? _resolvePowerCaps;
 
   /// MAC resuelta una sola vez (la interfaz no cambia en operación);
   /// null si no se pudo determinar: entonces simplemente no se envía.
@@ -239,12 +245,24 @@ class CauceHeartbeatService with WidgetsBindingObserver {
       // medio: el Media.id entero del contrato. Sin medio confirmado
       // se omite y el servidor guarda "unknown".
       final mediaId = playbackState?.currentMediaId;
+      // `power_caps` (can_standby/can_wake por Device Admin/Owner) le
+      // dice al servidor que este dispositivo puede ejecutar power por
+      // su propio canal WS. Se resuelve en cada latido (los diálogos
+      // de aprovisionamiento lo cambian a mitad de arranque); un
+      // proveedor roto jamás rompe el heartbeat.
+      Map<String, Object?>? powerCaps;
+      try {
+        powerCaps = await _resolvePowerCaps?.call();
+      } catch (_) {
+        powerCaps = null;
+      }
       final body = jsonEncode({
         'ip_address': ipAddress,
         if (macAddress != null) 'mac_address': macAddress,
         'device_state': await _deviceState(),
         'payload': {
           if (mediaId != null) 'current_media': mediaId,
+          if (powerCaps != null) 'power_caps': powerCaps,
         },
       });
       final uri = Uri.parse(
